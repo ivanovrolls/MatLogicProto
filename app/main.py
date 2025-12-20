@@ -1,15 +1,18 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal, get_db
-from app.db.models import User, Graph, Node
+from app.db.session import SessionLocal, get_db, engine
+from app.db.models import Base, Edge, User, Graph, Node
 from app.schemas import (
     UserCreate, UserRead,
     GraphCreate, GraphRead,
     NodeCreate, NodeRead,
+    EdgeCreate, EdgeRead
 )
 
 app = FastAPI(title="MatsLogic API", version="0.1")
+Base.metadata.create_all(bind=engine)
+
 
 @app.get("/")
 def root():
@@ -17,7 +20,7 @@ def root():
 
 @app.post("/users/", response_model=UserRead)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = User(email=user.email)
+    db_user = User(name=user.name, email=user.email)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
@@ -64,3 +67,65 @@ def read_node(node_id: int, db: Session = Depends(get_db)):
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     return db_node
+
+@app.post("/edges/", response_model=EdgeRead)
+def create_edge(edge: EdgeCreate, db: Session = Depends(get_db)):
+    #edge creation logic - from one node to another
+    #first checking origin and destination nodes exist
+    from_node = db.query(Node).filter(Node.id == edge.from_node_id).first()
+    if from_node is None:
+        raise HTTPException(status_code=404, detail="Origin node not found")
+    to_node = db.query(Node).filter(Node.id == edge.to_node_id).first()
+    if to_node is None:
+        raise HTTPException(status_code=404, detail="Destination node not found")
+
+    #then check both nodes belong on the same graph
+    if from_node.graph_id != to_node.graph_id:
+        raise HTTPException(status_code=400, detail="Nodes do not belong to the same graph")
+    
+    #prevent duplicate edges
+    existing_edge = db.query(Edge).filter(
+        Edge.from_node_id == edge.from_node_id,
+        Edge.to_node_id == edge.to_node_id
+    ).first()
+    if existing_edge:
+        raise HTTPException(status_code=400, detail="Edge already exists")
+
+        db_edge = Edge(
+        from_node_id=edge.from_node_id,
+        to_node_id=edge.to_node_id
+    )
+    db.add(db_edge)
+    db.commit()
+    db.refresh(db_edge)
+
+    return db_edge
+
+@app.get("/edges/{edge_id}", response_model=EdgeRead)
+def read_edge(edge_id: int, db: Session = Depends(get_db)):
+    #get edge by id, return 404 if not found
+    db_edge = db.query(Edge).filter(Edge.id == edge_id).first()
+
+    if db_edge is None:
+        raise HTTPException(status_code=404, detail="Edge not found")
+
+    return db_edge
+
+@app.get("/nodes/{node_id}/next", response_model=list[NodeRead])
+def get_next_nodes(node_id: int, db: Session = Depends(get_db)):
+
+    #return all nodes directly reachablae (1 step)
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    #outgoing edges
+    edges = db.query(Edge).filter(Edge.from_node_id == node_id).all()
+
+    #get destination node ids
+    to_node_ids = [edge.to_node_id for edge in edges]
+    if not to_node_ids:
+        return []
+    next_nodes = db.query(Node).filter(Node.id.in_(to_node_ids)).all()
+
+    return next_nodes

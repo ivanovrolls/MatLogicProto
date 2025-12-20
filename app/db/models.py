@@ -9,7 +9,6 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     email = Column(String, unique=True, index=True)
-    items = relationship("Item", back_populates="owner")
 
 class Graph(Base):
     __tablename__ = 'graphs'
@@ -27,6 +26,7 @@ class Node(Base):
 
 class Edge(Base):
     __tablename__ = "edges"
+
     id = Column(Integer, primary_key=True, index=True)
-    from_node_id = Column(Integer, ForeignKey("nodes.id"))
-    to_node_id = Column(Integer, ForeignKey("nodes.id"))
+    from_node_id = Column(Integer, ForeignKey("nodes.id"), nullable=False, index=True)
+    to_node_id = Column(Integer, ForeignKey("nodes.id"), nullable=False, index=True)
