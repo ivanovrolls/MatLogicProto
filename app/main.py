@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_db, engine
@@ -89,9 +89,9 @@ def create_edge(edge: EdgeCreate, db: Session = Depends(get_db)):
         Edge.to_node_id == edge.to_node_id
     ).first()
     if existing_edge:
-        raise HTTPException(status_code=400, detail="Edge already exists")
+        raise HTTPException(status_code=409, detail="Edge already exists")
 
-        db_edge = Edge(
+    db_edge = Edge(
         from_node_id=edge.from_node_id,
         to_node_id=edge.to_node_id
     )
@@ -129,3 +129,57 @@ def get_next_nodes(node_id: int, db: Session = Depends(get_db)):
     next_nodes = db.query(Node).filter(Node.id.in_(to_node_ids)).all()
 
     return next_nodes
+
+#LIST ENDPOINTS
+@app.get("/users/", response_model=list[UserRead])
+def list_users(
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    return db.query(User).order_by(User.id).offset(offset).limit(limit).all()
+
+@app.get("/graphs/", response_model=list[GraphRead])
+def list_graphs(
+    db: Session = Depends(get_db),
+    user_id: int | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    q = db.query(Graph)
+    if user_id is not None:
+        q = q.filter(Graph.user_id == user_id)
+    return q.order_by(Graph.id).offset(offset).limit(limit).all()
+
+@app.get("/nodes/", response_model=list[NodeRead])
+def list_nodes(
+    db: Session = Depends(get_db),
+    graph_id: int | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    q = db.query(Node)
+    if graph_id is not None:
+        q = q.filter(Node.graph_id == graph_id)
+    return q.order_by(Node.id).offset(offset).limit(limit).all()
+
+@app.get("/edges/", response_model=list[EdgeRead]) #edges do not have a direct graph_id, so we filter via nodes
+def list_edges(
+    db: Session = Depends(get_db),
+    graph_id: int | None = Query(None),
+    from_node_id: int | None = Query(None),
+    to_node_id: int | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    q = db.query(Edge)
+
+    if from_node_id is not None:
+        q = q.filter(Edge.from_node_id == from_node_id)
+    if to_node_id is not None:
+        q = q.filter(Edge.to_node_id == to_node_id)
+
+    if graph_id is not None:
+        q = q.join(Node, Edge.from_node_id == Node.id).filter(Node.graph_id == graph_id)
+
+    return q.order_by(Edge.id).offset(offset).limit(limit).all()
