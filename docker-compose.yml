@@ -5,3 +5,21 @@ services:
     build: .
     ports:
       - "8000:8000"
+    volumes:
+      - ./app:/app/app   # Mount host app folder
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: matslogic
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
