@@ -68,6 +68,21 @@ def read_node(node_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Node not found")
     return db_node
 
+@app.delete("/nodes/{node_id}", status_code=204)
+def delete_node(node_id: int, db: Session = Depends(get_db)):
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    #delete connected edges first
+    db.query(Edge).filter(
+        (Edge.from_node_id == node_id) | (Edge.to_node_id == node_id)
+    ).delete(synchronize_session=False)
+
+    db.delete(node)
+    db.commit()
+    return Response(status_code=204)
+
 @app.post("/edges/", response_model=EdgeRead)
 def create_edge(edge: EdgeCreate, db: Session = Depends(get_db)):
     #edge creation logic - from one node to another
@@ -130,6 +145,16 @@ def get_next_nodes(node_id: int, db: Session = Depends(get_db)):
 
     return next_nodes
 
+@app.delete("/edges/{edge_id}", status_code=204)
+def delete_edge(edge_id: int, db: Session = Depends(get_db)):
+    edge = db.query(Edge).filter(Edge.id == edge_id).first()
+    if edge is None:
+        raise HTTPException(status_code=404, detail="Edge not found")
+
+    db.delete(edge)
+    db.commit()
+    return Response(status_code=204)
+
 #LIST ENDPOINTS
 @app.get("/users/", response_model=list[UserRead])
 def list_users(
@@ -183,3 +208,5 @@ def list_edges(
         q = q.join(Node, Edge.from_node_id == Node.id).filter(Node.graph_id == graph_id)
 
     return q.order_by(Edge.id).offset(offset).limit(limit).all()
+
+
