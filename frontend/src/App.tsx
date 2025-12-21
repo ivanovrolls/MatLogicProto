@@ -619,7 +619,7 @@ export default function App() {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: 12, borderBottom: "1px solid #ddd", display: "flex", gap: 12, alignItems: "center" }}>
-        <strong>MatsLogic</strong>
+        <strong>MatLogic</strong>
 
         <button onClick={() => void loadAll()}>Reload</button>
 
