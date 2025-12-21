@@ -46,3 +46,20 @@ class EdgeRead(BaseModel):
     
     class Config:
         orm_mode = True
+
+class TechniqueCreate(BaseModel):
+    video_url: str | None = None
+    steps: str | None = None
+
+class TechniqueUpdate(BaseModel):
+    video_url: str | None = None
+    steps: str | None = None
+
+class TechniqueRead(BaseModel):
+    id: int
+    node_id: int
+    video_url: str | None
+    steps: str | None
+    
+    class Config:
+        orm_mode = True

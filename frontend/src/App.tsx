@@ -42,6 +42,12 @@ type EdgeT = {
   to_node_id: number;
 };
 
+type TechniqueDraft = {
+  videoUrl: string;
+  steps: string;
+  updatedAt: number;
+};
+
 const API_BASE = "/api";
 
 //generates localStorage key for node positions per graph
@@ -69,6 +75,54 @@ function savePositions(graphId: number, map: PosMap) {
   }
 }
 
+//loads technique data from backend
+async function loadTechniqueDraft(nodeId: number): Promise<TechniqueDraft> {
+  try {
+    const res = await fetch(`${API_BASE}/nodes/${nodeId}/technique`);
+    if (!res.ok) {
+      return { videoUrl: "", steps: "", updatedAt: Date.now() };
+    }
+    const data = await res.json();
+    return {
+      videoUrl: data.video_url || "",
+      steps: data.steps || "",
+      updatedAt: Date.now(),
+    };
+  } catch {
+    return { videoUrl: "", steps: "", updatedAt: Date.now() };
+  }
+}
+
+//saves technique data to backend
+async function saveTechniqueDraft(nodeId: number, draft: TechniqueDraft) {
+  try {
+    //try to update first
+    const updateRes = await fetch(`${API_BASE}/nodes/${nodeId}/technique`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_url: draft.videoUrl,
+        steps: draft.steps,
+      }),
+    });
+
+    if (updateRes.ok) return;
+
+    //if update fails (404), create new
+    if (updateRes.status === 404) {
+      await fetch(`${API_BASE}/nodes/${nodeId}/technique`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          video_url: draft.videoUrl,
+          steps: draft.steps,
+        }),
+      });
+    }
+  } catch {
+  }
+}
+
 //custom hexagonal node component for bjj techniques
 function HexNode({ data, selected }: { data: { label: string }; selected: boolean }) {
   return (
@@ -85,22 +139,17 @@ function HexNode({ data, selected }: { data: { label: string }; selected: boolea
         fontWeight: 500,
         userSelect: "none",
         clipPath: "polygon(30% 0%, 70% 0%, 100% 50%, 70% 100%, 30% 100%, 0% 50%)",
-
         border: selected ? "2px solid #ea580c" : "1.5px solid #c2410c",
-
         background: selected
           ? "linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%)"
           : "linear-gradient(135deg, #c2410c 0%, #9a3412 100%)",
-
         boxShadow: selected
           ? "0 4px 12px rgba(234, 88, 12, 0.45), inset 0 1px 0 rgba(255,255,255,0.2)"
           : "0 2px 6px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08)",
-
         transition: "all 0.2s ease",
         position: "relative",
       }}
     >
-      {/* target handle (incoming) */}
       <Handle
         type="target"
         position={Position.Left}
@@ -112,12 +161,9 @@ function HexNode({ data, selected }: { data: { label: string }; selected: boolea
           background: selected ? "#ea580c" : "#fdba74",
         }}
       />
-
       <span style={{ color: selected ? "#7c2d12" : "#fff7ed" }}>
         {data.label}
       </span>
-
-      {/* source handle (outgoing) */}
       <Handle
         type="source"
         position={Position.Right}
@@ -148,11 +194,10 @@ export default function App() {
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<number[]>([]);
 
-  const nodeTypes = useMemo(() => ({ hex: HexNode }), []); //hexagonal node lock
+  const nodeTypes = useMemo(() => ({ hex: HexNode }), []);
 
   //for zooming and panning control
   const rfInstance = useRef<ReactFlowInstance | null>(null);
-
 
   const [newGraphTitle, setNewGraphTitle] = useState("");
   const [newNodeName, setNewNodeName] = useState("");
@@ -171,9 +216,58 @@ export default function App() {
   });
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme; // <html data-theme="...">
+    document.documentElement.dataset.theme = theme;
     localStorage.setItem("matlogic:theme", theme);
   }, [theme]);
+
+  //technique panel state
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [activeNodeId, setActiveNodeId] = useState<number | null>(null);
+  const [techVideoUrl, setTechVideoUrl] = useState("");
+  const [techSteps, setTechSteps] = useState("");
+
+  //debounced autosave for technique drafts
+  const techniqueSaveTimer = useRef<number | null>(null);
+
+  const activeNode = useMemo(() => {
+    if (activeNodeId == null) return null;
+    return nodes.find((n) => n.id === activeNodeId) ?? null;
+  }, [activeNodeId, nodes]);
+
+  const openTechniquePanel = useCallback(
+    async (nodeId: number) => {
+      const draft = await loadTechniqueDraft(nodeId);
+      setActiveNodeId(nodeId);
+      setTechVideoUrl(draft.videoUrl);
+      setTechSteps(draft.steps);
+      setIsPanelOpen(true);
+    },
+    []
+  );
+
+  const closeTechniquePanel = useCallback(() => {
+    setIsPanelOpen(false);
+    setActiveNodeId(null);
+  }, []);
+
+  //autosave on edits (debounced)
+  useEffect(() => {
+    if (activeNodeId == null) return;
+    if (!isPanelOpen) return;
+
+    if (techniqueSaveTimer.current) window.clearTimeout(techniqueSaveTimer.current);
+    techniqueSaveTimer.current = window.setTimeout(() => {
+      saveTechniqueDraft(activeNodeId, {
+        videoUrl: techVideoUrl,
+        steps: techSteps,
+        updatedAt: Date.now(),
+      });
+    }, 500);
+
+    return () => {
+      if (techniqueSaveTimer.current) window.clearTimeout(techniqueSaveTimer.current);
+    };
+  }, [techVideoUrl, techSteps, activeNodeId, isPanelOpen]);
 
   //fetches all data from backend and sets defaults
   const loadAll = useCallback(async () => {
@@ -206,12 +300,10 @@ export default function App() {
   async function deleteNodesById(ids: number[]) {
     if (ids.length === 0) return;
 
-    //delete in backend first
     await Promise.all(
       ids.map(id => fetch(`${API_BASE}/nodes/${id}`, { method: "DELETE" }))
     );
 
-    //update local state
     setEdges(prev =>
       prev.filter(e => !ids.includes(e.from_node_id) && !ids.includes(e.to_node_id))
     );
@@ -237,15 +329,12 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = async (e: KeyboardEvent) => {
-      //backspace + delete
       if (isTypingInEditableElement(e.target)) return;
       if (e.key !== "Backspace" && e.key !== "Delete") return;
 
-      //prevent browser navigation back on Backspace
       e.preventDefault();
 
       try {
-        //prefer deleting edges first if both are selected (safer)
         if (selectedEdgeIds.length > 0) {
           await deleteEdgesById(selectedEdgeIds);
           setSelectedEdgeIds([]);
@@ -353,7 +442,6 @@ export default function App() {
       const fromId = Number(connection.source);
       const toId = Number(connection.target);
 
-      //optimistically add edge to ui before backend confirms
       setRfEdges((eds) => addEdge({ ...connection, type: "straight" }, eds));
 
       try {
@@ -377,7 +465,6 @@ export default function App() {
         const created: EdgeT = await res.json();
         setEdges((prev) => [...prev, created]);
 
-        //replace optimistic edge with real backend edge id
         setRfEdges((prev) => [
           ...prev.filter((e) => !(e.source === connection.source && e.target === connection.target)),
           { id: String(created.id), source: String(created.from_node_id), target: String(created.to_node_id), type: "straight" },
@@ -458,7 +545,6 @@ export default function App() {
       setNodes((prev) => [...prev, created]);
       setNewNodeName("");
 
-      //add new node to react flow with random position and persist
       setRfNodes((prev) => {
         const next = [
           ...prev,
@@ -477,23 +563,58 @@ export default function App() {
     }
   }, [newNodeName, persistPositions, selectedGraphId, setNodes, setRfNodes]);
 
+  //groups all nodes together in a compact layout
+  const groupNodesCenter = useCallback(() => {
+    if (!selectedGraphId || rfNodes.length === 0) return;
+
+    //calculate grid layout dimensions
+    const nodeCount = rfNodes.length;
+    const cols = Math.ceil(Math.sqrt(nodeCount));
+    const spacing = 120;
+    const startX = 200;
+    const startY = 200;
+
+    const updatedNodes = rfNodes.map((node, index) => {
+      const row = Math.floor(index / cols);
+      const col = index % cols;
+      return {
+        ...node,
+        position: {
+          x: startX + col * spacing,
+          y: startY + row * spacing,
+        },
+      };
+    });
+
+    setRfNodes(updatedNodes);
+    persistPositions(updatedNodes);
+
+    //pan to center of grouped nodes
+    if (rfInstance.current) {
+      setTimeout(() => {
+        rfInstance.current?.fitView({
+          padding: 0.2,
+          maxZoom: 1,
+          duration: 400,
+        });
+      }, 50);
+    }
+  }, [rfNodes, selectedGraphId, setRfNodes, persistPositions]);
+
   useEffect(() => {
     if (!rfInstance.current) return;
 
-    //if there are no nodes, don't try to fit view
     if (rfNodes.length === 0) {
       rfInstance.current.setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 0 });
       return;
     }
 
-    //fit the whole graph but prevent zooming in too far
     rfInstance.current.fitView({
       padding: 0.35,
       maxZoom: 1,
       duration: 0,
     });
   }, [rfNodes]);
-
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
@@ -556,35 +677,168 @@ export default function App() {
             Add node
           </button>
         </span>
+        
         <button
           onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
           title="Toggle dark mode"
         >
           {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
         </button>
+
+        <button
+          onClick={groupNodesCenter}
+          disabled={!selectedGraphId || rfNodes.length === 0}
+          title="Group all nodes together"
+        >
+          📦 Group Nodes
+        </button>
       </div>
 
       <div style={{ flex: 1 }}>
-        <ReactFlow
-          nodes={rfNodes}
-          edges={rfEdges}
-          nodeTypes={nodeTypes}
-          onInit={(instance) => {
-            rfInstance.current = instance;
-          }}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onSelectionChange={({ nodes, edges }) => {
-            setSelectedNodeIds(nodes.map(n => Number(n.id)));
-            setSelectedEdgeIds(edges.map(e => Number(e.id)));
-          }}
-          deleteKeyCode={null}
-          fitView={false}
-        >
-          <Background />
-          <Controls />
-        </ReactFlow>
+        <div style={{ height: "100%", display: "flex" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ReactFlow
+              nodes={rfNodes}
+              edges={rfEdges}
+              nodeTypes={nodeTypes}
+              onInit={(instance) => {
+                rfInstance.current = instance;
+              }}
+              onNodeDoubleClick={(_, node) => {
+                const id = Number(node.id);
+                if (!Number.isFinite(id)) return;
+                openTechniquePanel(id);
+              }}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onSelectionChange={({ nodes, edges }) => {
+                setSelectedNodeIds(nodes.map(n => Number(n.id)));
+                setSelectedEdgeIds(edges.map(e => Number(e.id)));
+              }}
+              deleteKeyCode={null}
+              fitView={false}
+            >
+              <Background />
+              <Controls />
+            </ReactFlow>
+          </div>
+
+          {isPanelOpen && activeNodeId != null && (
+            <div
+              style={{
+                width: 360,
+                borderLeft: "1px solid #ddd",
+                padding: 12,
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                background: theme === "dark" ? "#0b0f19" : "#fff",
+                color: theme === "dark" ? "#e5e7eb" : "#111827",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    {activeNode?.name ?? `Technique #${activeNodeId}`}
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>
+                    Add a video link, then visualise it in first-person and write your steps.
+                  </div>
+                </div>
+
+                <button onClick={closeTechniquePanel} title="Close">
+                  ✕
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Video link</label>
+                <input
+                  value={techVideoUrl}
+                  onChange={(e) => setTechVideoUrl(e.target.value)}
+                  placeholder="https://youtube.com/…"
+                  style={{
+                    width: "100%",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #d1d5db",
+                    background: theme === "dark" ? "#111827" : "#fff",
+                    color: theme === "dark" ? "#e5e7eb" : "#111827",
+                  }}
+                />
+
+                {techVideoUrl.trim() && (
+                  <a
+                    href={techVideoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: 12 }}
+                  >
+                    Open video ↗
+                  </a>
+                )}
+              </div>
+
+              <div
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #d1d5db",
+                  background: theme === "dark" ? "#0f172a" : "#fff7ed",
+                  fontSize: 12,
+                  lineHeight: 1.35,
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Prompt</div>
+                <div>
+                  Close your eyes for 10–20 seconds and imagine doing this technique in
+                  <b> first person</b>. Feel the grips, weight shift, hip angle, and
+                  timing. Then write the steps like you're coaching yourself.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Step-by-step</label>
+                <textarea
+                  value={techSteps}
+                  onChange={(e) => setTechSteps(e.target.value)}
+                  placeholder={
+                    "Example:\n1) Establish grip…\n2) Shift hips…\n3) Off-balance…\n4) Finish…"
+                  }
+                  style={{
+                    width: "100%",
+                    flex: 1,
+                    minHeight: 220,
+                    resize: "vertical",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #d1d5db",
+                    background: theme === "dark" ? "#111827" : "#fff",
+                    color: theme === "dark" ? "#e5e7eb" : "#111827",
+                    fontFamily: "inherit",
+                    fontSize: 13,
+                  }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => {
+                    saveTechniqueDraft(activeNodeId, {
+                      videoUrl: techVideoUrl,
+                      steps: techSteps,
+                      updatedAt: Date.now(),
+                    });
+                  }}
+                  title="Save now"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

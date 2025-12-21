@@ -1,13 +1,16 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+
 from app.db.session import SessionLocal, get_db, engine
-from app.db.models import Base, Edge, User, Graph, Node
+from app.db.models import Base, Edge, User, Graph, Node, Technique
 from app.schemas import (
     UserCreate, UserRead,
     GraphCreate, GraphRead,
     NodeCreate, NodeRead,
-    EdgeCreate, EdgeRead
+    EdgeCreate, EdgeRead,
+    TechniqueCreate, TechniqueRead, TechniqueUpdate
 )
 
 app = FastAPI(title="MatsLogic API", version="0.1")
@@ -74,6 +77,9 @@ def delete_node(node_id: int, db: Session = Depends(get_db)):
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
 
+    #delete technique data associated with this node
+    db.query(Technique).filter(Technique.node_id == node_id).delete(synchronize_session=False)
+
     #delete connected edges first
     db.query(Edge).filter(
         (Edge.from_node_id == node_id) | (Edge.to_node_id == node_id)
@@ -129,7 +135,7 @@ def read_edge(edge_id: int, db: Session = Depends(get_db)):
 @app.get("/nodes/{node_id}/next", response_model=list[NodeRead])
 def get_next_nodes(node_id: int, db: Session = Depends(get_db)):
 
-    #return all nodes directly reachablae (1 step)
+    #return all nodes directly reachable (1 step)
     node = db.query(Node).filter(Node.id == node_id).first()
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -152,6 +158,73 @@ def delete_edge(edge_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Edge not found")
 
     db.delete(edge)
+    db.commit()
+    return Response(status_code=204)
+
+#TECHNIQUE ENDPOINTS
+@app.get("/nodes/{node_id}/technique", response_model=TechniqueRead)
+def get_technique(node_id: int, db: Session = Depends(get_db)):
+    #get technique data for a node
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    technique = db.query(Technique).filter(Technique.node_id == node_id).first()
+    if technique is None:
+        raise HTTPException(status_code=404, detail="Technique not found")
+    
+    return technique
+
+@app.post("/nodes/{node_id}/technique", response_model=TechniqueRead)
+def create_technique(node_id: int, technique: TechniqueCreate, db: Session = Depends(get_db)):
+    #create technique data for a node
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    #check if technique already exists
+    existing = db.query(Technique).filter(Technique.node_id == node_id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Technique already exists for this node")
+    
+    db_technique = Technique(
+        node_id=node_id,
+        video_url=technique.video_url,
+        steps=technique.steps
+    )
+    db.add(db_technique)
+    db.commit()
+    db.refresh(db_technique)
+    return db_technique
+
+@app.put("/nodes/{node_id}/technique", response_model=TechniqueRead)
+def update_technique(node_id: int, technique: TechniqueUpdate, db: Session = Depends(get_db)):
+    #update technique data for a node
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    db_technique = db.query(Technique).filter(Technique.node_id == node_id).first()
+    if db_technique is None:
+        raise HTTPException(status_code=404, detail="Technique not found")
+    
+    if technique.video_url is not None:
+        db_technique.video_url = technique.video_url
+    if technique.steps is not None:
+        db_technique.steps = technique.steps
+    
+    db.commit()
+    db.refresh(db_technique)
+    return db_technique
+
+@app.delete("/nodes/{node_id}/technique", status_code=204)
+def delete_technique(node_id: int, db: Session = Depends(get_db)):
+    #delete technique data for a node
+    technique = db.query(Technique).filter(Technique.node_id == node_id).first()
+    if technique is None:
+        raise HTTPException(status_code=404, detail="Technique not found")
+    
+    db.delete(technique)
     db.commit()
     return Response(status_code=204)
 
@@ -188,7 +261,7 @@ def list_nodes(
         q = q.filter(Node.graph_id == graph_id)
     return q.order_by(Node.id).offset(offset).limit(limit).all()
 
-@app.get("/edges/", response_model=list[EdgeRead]) #edges do not have a direct graph_id, so we filter via nodes
+@app.get("/edges/", response_model=list[EdgeRead])
 def list_edges(
     db: Session = Depends(get_db),
     graph_id: int | None = Query(None),
@@ -208,5 +281,3 @@ def list_edges(
         q = q.join(Node, Edge.from_node_id == Node.id).filter(Node.graph_id == graph_id)
 
     return q.order_by(Edge.id).offset(offset).limit(limit).all()
-
-
