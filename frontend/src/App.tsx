@@ -7,6 +7,7 @@ import ReactFlow, {
   useNodesState,
   Handle,
   Position,
+  MarkerType,
 } from "reactflow";
 import type {
   Connection,
@@ -36,10 +37,14 @@ type NodeT = {
   graph_id: number;
 };
 
+type EdgeTypeT = "positive" | "neutral" | "negative";
+
 type EdgeT = {
   id: number;
   from_node_id: number;
   to_node_id: number;
+  edge_type: EdgeTypeT;
+  label?: string | null;
 };
 
 type TechniqueDraft = {
@@ -179,6 +184,19 @@ function HexNode({ data, selected }: { data: { label: string }; selected: boolea
   );
 }
 
+//edge cycling
+function edgeStroke(type: EdgeTypeT) {
+  if (type === "positive") return "#16a34a";
+  if (type === "neutral") return "#1f307cff";
+  return "#dc2626";
+}
+
+function nextEdgeType(type: EdgeTypeT): EdgeTypeT {
+  if (type === "positive") return "neutral";
+  if (type === "neutral") return "negative";
+  return "positive";
+}
+
 export default function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [graphs, setGraphs] = useState<Graph[]>([]);
@@ -228,6 +246,11 @@ export default function App() {
 
   //debounced autosave for technique drafts
   const techniqueSaveTimer = useRef<number | null>(null);
+
+  //new edge comments, do not use capital letters or whitespace after //
+  //edge label editing state
+  const [edgeLabelDraft, setEdgeLabelDraft] = useState("");
+  const selectedEdgeId = selectedEdgeIds.length === 1 ? selectedEdgeIds[0] : null;
 
   const activeNode = useMemo(() => {
     if (activeNodeId == null) return null;
@@ -391,6 +414,8 @@ export default function App() {
       source: String(e.from_node_id),
       target: String(e.to_node_id),
       type: "straight",
+      label: e.label ?? "",
+      style: { stroke: edgeStroke(e.edge_type), strokeWidth: 2.5 },
     }));
 
     setRfNodes(nextRfNodes);
@@ -433,6 +458,32 @@ export default function App() {
     [onEdgesChangeBase]
   );
 
+  //new edge comments, do not use capital letters or whitespace after //
+  //tries to persist edge updates; if backend doesn't support it, ui still updates
+  const updateEdgeBackend = useCallback(async (edgeId: number, patch: Partial<EdgeT>) => {
+    try {
+      const res = await fetch(`${API_BASE}/edges/${edgeId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  //new edge comments, do not use capital letters or whitespace after //
+  //sync label draft when selection changes
+  useEffect(() => {
+    if (selectedEdgeId == null) {
+      setEdgeLabelDraft("");
+      return;
+    }
+    const e = edges.find(x => x.id === selectedEdgeId);
+    setEdgeLabelDraft((e?.label ?? "") || "");
+  }, [selectedEdgeId, edges]);
+
   //creates edge in backend when user connects two nodes in ui
   const onConnect = useCallback(
     async (connection: Connection) => {
@@ -442,13 +493,26 @@ export default function App() {
       const fromId = Number(connection.source);
       const toId = Number(connection.target);
 
-      setRfEdges((eds) => addEdge({ ...connection, type: "straight" }, eds));
+      setRfEdges((eds) =>
+        addEdge(
+          {
+            ...connection,
+            type: "straight",
+            style: { stroke: edgeStroke("positive"), strokeWidth: 2.5 },
+          },
+          eds
+        )
+      );
 
       try {
         const res = await fetch(`${API_BASE}/edges/`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ from_node_id: fromId, to_node_id: toId }),
+          body: JSON.stringify({
+            from_node_id: fromId,
+            to_node_id: toId,
+            edge_type: "positive",
+          }),
         });
 
         if (!res.ok) {
@@ -467,7 +531,14 @@ export default function App() {
 
         setRfEdges((prev) => [
           ...prev.filter((e) => !(e.source === connection.source && e.target === connection.target)),
-          { id: String(created.id), source: String(created.from_node_id), target: String(created.to_node_id), type: "straight" },
+          {
+            id: String(created.id),
+            source: String(created.from_node_id),
+            target: String(created.to_node_id),
+            type: "straight",
+            label: created.label ?? "",
+            style: { stroke: edgeStroke(created.edge_type ?? "positive"), strokeWidth: 2.5 },
+          },
         ]);
       } catch {
         await loadAll();
@@ -476,6 +547,58 @@ export default function App() {
     },
     [loadAll, setEdges, setRfEdges]
   );
+
+  //new edge comments, do not use capital letters or whitespace after //
+  //double click edge to cycle type + color
+  const onEdgeDoubleClick = useCallback(
+    async (_: unknown, rfEdge: RFEdge) => {
+      const id = Number(rfEdge.id);
+      if (!Number.isFinite(id)) return;
+
+      const current = edges.find(e => e.id === id);
+      const currentType: EdgeTypeT = (current?.edge_type ?? "positive") as EdgeTypeT;
+      const nextType = nextEdgeType(currentType);
+
+      setEdges(prev =>
+        prev.map(e => (e.id === id ? { ...e, edge_type: nextType } : e))
+      );
+
+      setRfEdges(prev =>
+        prev.map(e =>
+          e.id === rfEdge.id
+            ? { ...e, style: { ...(e.style ?? {}), stroke: edgeStroke(nextType), strokeWidth: 2.5 } }
+            : e
+        )
+      );
+
+      const ok = await updateEdgeBackend(id, { edge_type: nextType });
+      if (!ok) {
+        setError("edge updated in ui, but backend did not accept the update (add a put/patch endpoint for edges to persist this).");
+      }
+    },
+    [edges, setEdges, setRfEdges, updateEdgeBackend]
+  );
+
+  //new edge comments, do not use capital letters or whitespace after //
+  //save edge label for the currently selected edge
+  const saveSelectedEdgeLabel = useCallback(async () => {
+    if (selectedEdgeId == null) return;
+
+    const label = edgeLabelDraft.trim();
+
+    setEdges(prev =>
+      prev.map(e => (e.id === selectedEdgeId ? { ...e, label } : e))
+    );
+
+    setRfEdges(prev =>
+      prev.map(e => (Number(e.id) === selectedEdgeId ? { ...e, label } : e))
+    );
+
+    const ok = await updateEdgeBackend(selectedEdgeId, { label });
+    if (!ok) {
+      setError("label updated in ui, but backend did not accept the update (add a put/patch endpoint for edges to persist this).");
+    }
+  }, [edgeLabelDraft, selectedEdgeId, setEdges, setRfEdges, updateEdgeBackend]);
 
   //creates new graph in backend
   const createGraph = useCallback(async () => {
@@ -677,6 +800,20 @@ export default function App() {
             Add node
           </button>
         </span>
+
+        {selectedEdgeId != null && (
+          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              value={edgeLabelDraft}
+              onChange={(e) => setEdgeLabelDraft(e.target.value)}
+              placeholder="Edge label…"
+              style={{ width: 180 }}
+            />
+            <button onClick={() => void saveSelectedEdgeLabel()}>
+              Save label
+            </button>
+          </span>
+        )}
         
         <button
           onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
@@ -709,6 +846,7 @@ export default function App() {
                 if (!Number.isFinite(id)) return;
                 openTechniquePanel(id);
               }}
+              onEdgeDoubleClick={onEdgeDoubleClick}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}

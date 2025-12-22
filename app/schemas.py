@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from app.db.models import EdgeType
 
 class UserCreate(BaseModel):
     name: str
@@ -38,14 +39,24 @@ class NodeRead(BaseModel):
 class EdgeCreate(BaseModel):
     from_node_id: int
     to_node_id: int
+    edge_type: EdgeType = EdgeType.POSITIVE
+    note: str | None = None   #new optional field
 
 class EdgeRead(BaseModel):
     id: int
     from_node_id: int
     to_node_id: int
-    
+    edge_type: EdgeType
+    note: str | None          #new optional field
+
     class Config:
         orm_mode = True
+
+class EdgeUpdate(BaseModel):
+    edge_type: EdgeType | None = None
+    note: str | None = None
+    color: str | None = None
+    label: str | None = None
 
 class TechniqueCreate(BaseModel):
     video_url: str | None = None

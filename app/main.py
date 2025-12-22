@@ -4,12 +4,12 @@ from sqlalchemy.orm import Session
 
 
 from app.db.session import SessionLocal, get_db, engine
-from app.db.models import Base, Edge, User, Graph, Node, Technique
+from app.db.models import Base, Edge, User, Graph, Node, Technique, EdgeType
 from app.schemas import (
     UserCreate, UserRead,
     GraphCreate, GraphRead,
     NodeCreate, NodeRead,
-    EdgeCreate, EdgeRead,
+    EdgeCreate, EdgeRead, EdgeUpdate, EdgeType,
     TechniqueCreate, TechniqueRead, TechniqueUpdate
 )
 
@@ -104,17 +104,20 @@ def create_edge(edge: EdgeCreate, db: Session = Depends(get_db)):
     if from_node.graph_id != to_node.graph_id:
         raise HTTPException(status_code=400, detail="Nodes do not belong to the same graph")
     
-    #prevent duplicate edges
+    #prevent duplicate edges with same type
     existing_edge = db.query(Edge).filter(
         Edge.from_node_id == edge.from_node_id,
-        Edge.to_node_id == edge.to_node_id
+        Edge.to_node_id == edge.to_node_id,
+        Edge.edge_type == edge.edge_type
     ).first()
     if existing_edge:
-        raise HTTPException(status_code=409, detail="Edge already exists")
+        raise HTTPException(status_code=409, detail="Edge with this type already exists")
 
     db_edge = Edge(
         from_node_id=edge.from_node_id,
-        to_node_id=edge.to_node_id
+        to_node_id=edge.to_node_id,
+        edge_type=edge.edge_type,
+        note=edge.note
     )
     db.add(db_edge)
     db.commit()
@@ -133,15 +136,22 @@ def read_edge(edge_id: int, db: Session = Depends(get_db)):
     return db_edge
 
 @app.get("/nodes/{node_id}/next", response_model=list[NodeRead])
-def get_next_nodes(node_id: int, db: Session = Depends(get_db)):
-
+def get_next_nodes(
+    node_id: int, 
+    db: Session = Depends(get_db),
+    edge_type: EdgeType | None = Query(None, description="filter by edge type")
+):
     #return all nodes directly reachable (1 step)
     node = db.query(Node).filter(Node.id == node_id).first()
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
 
-    #outgoing edges
-    edges = db.query(Edge).filter(Edge.from_node_id == node_id).all()
+    #outgoing edges with optional type filter
+    q = db.query(Edge).filter(Edge.from_node_id == node_id)
+    if edge_type is not None:
+        q = q.filter(Edge.edge_type == edge_type)
+    
+    edges = q.all()
 
     #get destination node ids
     to_node_ids = [edge.to_node_id for edge in edges]
@@ -261,12 +271,35 @@ def list_nodes(
         q = q.filter(Node.graph_id == graph_id)
     return q.order_by(Node.id).offset(offset).limit(limit).all()
 
+@app.put("/edges/{edge_id}", response_model=EdgeRead)
+def update_edge(edge_id: int, patch: EdgeUpdate, db: Session = Depends(get_db)):
+    db_edge = db.query(Edge).filter(Edge.id == edge_id).first()
+    if db_edge is None:
+        raise HTTPException(status_code=404, detail="Edge not found")
+
+    if patch.edge_type is not None:
+        db_edge.edge_type = patch.edge_type
+
+    if patch.color is not None:
+        db_edge.color = patch.color
+
+    if patch.label is not None:
+        db_edge.label = patch.label
+
+    if patch.note is not None:
+        db_edge.note = patch.note
+
+    db.commit()
+    db.refresh(db_edge)
+    return db_edge
+
 @app.get("/edges/", response_model=list[EdgeRead])
 def list_edges(
     db: Session = Depends(get_db),
     graph_id: int | None = Query(None),
     from_node_id: int | None = Query(None),
     to_node_id: int | None = Query(None),
+    edge_type: EdgeType | None = Query(None, description="filter by edge type"),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
@@ -276,6 +309,8 @@ def list_edges(
         q = q.filter(Edge.from_node_id == from_node_id)
     if to_node_id is not None:
         q = q.filter(Edge.to_node_id == to_node_id)
+    if edge_type is not None:
+        q = q.filter(Edge.edge_type == edge_type)
 
     if graph_id is not None:
         q = q.join(Node, Edge.from_node_id == Node.id).filter(Node.graph_id == graph_id)

@@ -1,8 +1,15 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, ForeignKey, Text, Enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
+import enum
 
 Base = declarative_base()
+
+#edge type enumeration for bjj transitions
+class EdgeType(enum.Enum):
+    POSITIVE = "positive"  #successful transitions and progress
+    NEUTRAL = "neutral"    #scrambles and uncertain situations
+    NEGATIVE = "negative"  #opponent escapes and setbacks
 
 class User(Base):
     __tablename__ = 'users'
@@ -35,6 +42,12 @@ class Edge(Base):
     id = Column(Integer, primary_key=True, index=True)
     from_node_id = Column(Integer, ForeignKey("nodes.id"), nullable=False, index=True)
     to_node_id = Column(Integer, ForeignKey("nodes.id"), nullable=False, index=True)
+    edge_type = Column(Enum(EdgeType), nullable=False, default=EdgeType.POSITIVE, index=True)
+    note = Column(Text, nullable=True)
+
+    #relationships to access the nodes
+    from_node = relationship("Node", foreign_keys=[from_node_id])
+    to_node = relationship("Node", foreign_keys=[to_node_id])
 
 class Technique(Base):
     __tablename__ = "techniques"
