@@ -7,7 +7,6 @@ import ReactFlow, {
   useNodesState,
   Handle,
   Position,
-  MarkerType,
 } from "reactflow";
 import type {
   Connection,
@@ -15,7 +14,7 @@ import type {
   NodeChange,
   Edge as RFEdge,
   Node as RFNode,
-  ReactFlowInstance
+  ReactFlowInstance,
 } from "reactflow";
 import "reactflow/dist/style.css";
 
@@ -196,7 +195,16 @@ async function saveTechniqueDraft(nodeId: number, draft: TechniqueDraft) {
 }
 
 //custom hexagonal node component for bjj techniques
-function HexNode({ data, selected }: { data: { label: string }; selected: boolean }) {
+function HexNode({
+  data,
+  selected,
+}: {
+  data: { label: string; dimmed?: boolean; highlighted?: boolean };
+  selected: boolean;
+}) {
+  const dimmed = Boolean(data.dimmed);
+  const highlighted = Boolean(data.highlighted);
+
   return (
     <div
       style={{
@@ -220,6 +228,8 @@ function HexNode({ data, selected }: { data: { label: string }; selected: boolea
           : "0 2px 6px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08)",
         transition: "all 0.2s ease",
         position: "relative",
+        opacity: dimmed ? 0.25 : 1,
+        filter: highlighted ? "drop-shadow(0 0 10px rgba(234, 88, 12, 0.55))" : "none",
       }}
     >
       <Handle
@@ -233,9 +243,7 @@ function HexNode({ data, selected }: { data: { label: string }; selected: boolea
           background: selected ? "#ea580c" : "#fdba74",
         }}
       />
-      <span style={{ color: selected ? "#7c2d12" : "#fff7ed" }}>
-        {data.label}
-      </span>
+      <span style={{ color: selected ? "#7c2d12" : "#fff7ed" }}>{data.label}</span>
       <Handle
         type="source"
         position={Position.Right}
@@ -285,7 +293,6 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
-
   //deleting nodes/edges state
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<number[]>([]);
@@ -328,21 +335,24 @@ export default function App() {
   const [edgeLabelDraft, setEdgeLabelDraft] = useState("");
   const selectedEdgeId = selectedEdgeIds.length === 1 ? selectedEdgeIds[0] : null;
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const searchWrapRef = useRef<HTMLDivElement | null>(null);
+
+  const [isMenuOpen, setIsMenuOpen] = useState(true);
+
   const activeNode = useMemo(() => {
     if (activeNodeId == null) return null;
     return nodes.find((n) => n.id === activeNodeId) ?? null;
   }, [activeNodeId, nodes]);
 
-  const openTechniquePanel = useCallback(
-    async (nodeId: number) => {
-      const draft = await loadTechniqueDraft(nodeId);
-      setActiveNodeId(nodeId);
-      setTechVideoUrl(draft.videoUrl);
-      setTechSteps(draft.steps);
-      setIsPanelOpen(true);
-    },
-    []
-  );
+  const openTechniquePanel = useCallback(async (nodeId: number) => {
+    const draft = await loadTechniqueDraft(nodeId);
+    setActiveNodeId(nodeId);
+    setTechVideoUrl(draft.videoUrl);
+    setTechSteps(draft.steps);
+    setIsPanelOpen(true);
+  }, []);
 
   const closeTechniquePanel = useCallback(() => {
     setIsPanelOpen(false);
@@ -386,7 +396,6 @@ export default function App() {
     })();
   }, [authToken]);
 
-
   //fetches all data from backend and sets defaults
   const loadAll = useCallback(async () => {
     setError(null);
@@ -412,7 +421,6 @@ export default function App() {
     }
   }, [authToken, selectedGraphId, selectedUserId]);
 
-
   useEffect(() => {
     if (!me) return;
     void loadAll();
@@ -422,24 +430,18 @@ export default function App() {
   async function deleteNodesById(ids: number[]) {
     if (ids.length === 0) return;
 
-    await Promise.all(
-      ids.map(id => fetch(`${API_BASE}/nodes/${id}`, { method: "DELETE" }))
-    );
+    await Promise.all(ids.map((id) => fetch(`${API_BASE}/nodes/${id}`, { method: "DELETE" })));
 
-    setEdges(prev =>
-      prev.filter(e => !ids.includes(e.from_node_id) && !ids.includes(e.to_node_id))
-    );
-    setNodes(prev => prev.filter(n => !ids.includes(n.id)));
+    setEdges((prev) => prev.filter((e) => !ids.includes(e.from_node_id) && !ids.includes(e.to_node_id)));
+    setNodes((prev) => prev.filter((n) => !ids.includes(n.id)));
   }
 
   async function deleteEdgesById(ids: number[]) {
     if (ids.length === 0) return;
 
-    await Promise.all(
-      ids.map(id => fetch(`${API_BASE}/edges/${id}`, { method: "DELETE" }))
-    );
+    await Promise.all(ids.map((id) => fetch(`${API_BASE}/edges/${id}`, { method: "DELETE" })));
 
-    setEdges(prev => prev.filter(e => !ids.includes(e.id)));
+    setEdges((prev) => prev.filter((e) => !ids.includes(e.id)));
   }
 
   function isTypingInEditableElement(target: EventTarget | null) {
@@ -488,6 +490,18 @@ export default function App() {
     return edges.filter((e) => nodeIds.has(e.from_node_id) && nodeIds.has(e.to_node_id));
   }, [edges, graphNodes, selectedGraphId]);
 
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return graphNodes.filter((n) => n.name.toLowerCase().includes(q)).slice(0, 12);
+  }, [searchQuery, graphNodes]);
+
+  const matchingNodeIds = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return new Set<number>();
+    return new Set(graphNodes.filter((n) => n.name.toLowerCase().includes(q)).map((n) => n.id));
+  }, [searchQuery, graphNodes]);
+
   //rebuilds react flow nodes/edges when graph selection or backend data changes
   useEffect(() => {
     if (!selectedGraphId) {
@@ -500,26 +514,39 @@ export default function App() {
 
     const nextRfNodes: RFNode[] = graphNodes.map((n) => {
       const saved = pos[String(n.id)];
+      const isMatch = matchingNodeIds.size === 0 ? false : matchingNodeIds.has(n.id);
+      const dimmed = matchingNodeIds.size > 0 && !isMatch;
+
       return {
         id: String(n.id),
         type: "hex",
-        data: { label: n.name },
+        data: { label: n.name, dimmed, highlighted: isMatch },
         position: saved ?? { x: 80 + Math.random() * 420, y: 80 + Math.random() * 420 },
       };
     });
 
-    const nextRfEdges: RFEdge[] = graphEdges.map((e) => ({
-      id: String(e.id),
-      source: String(e.from_node_id),
-      target: String(e.to_node_id),
-      type: "straight",
-      label: e.label ?? "",
-      style: { stroke: edgeStroke(e.edge_type), strokeWidth: 2.5 },
-    }));
+    const nextRfEdges: RFEdge[] = graphEdges.map((e) => {
+      const dimmed =
+        matchingNodeIds.size > 0 &&
+        (!matchingNodeIds.has(e.from_node_id) || !matchingNodeIds.has(e.to_node_id));
+
+      return {
+        id: String(e.id),
+        source: String(e.from_node_id),
+        target: String(e.to_node_id),
+        type: "straight",
+        label: e.label ?? "",
+        style: {
+          stroke: edgeStroke(e.edge_type),
+          strokeWidth: 2.5,
+          opacity: dimmed ? 0.15 : 1,
+        },
+      };
+    });
 
     setRfNodes(nextRfNodes);
     setRfEdges(nextRfEdges);
-  }, [selectedGraphId, graphNodes, graphEdges, setRfNodes, setRfEdges]);
+  }, [selectedGraphId, graphNodes, graphEdges, setRfNodes, setRfEdges, matchingNodeIds]);
 
   //writes current node positions to localStorage
   const persistPositions = useCallback(
@@ -577,13 +604,12 @@ export default function App() {
     [authToken]
   );
 
-
   useEffect(() => {
     if (selectedEdgeId == null) {
       setEdgeLabelDraft("");
       return;
     }
-    const e = edges.find(x => x.id === selectedEdgeId);
+    const e = edges.find((x) => x.id === selectedEdgeId);
     setEdgeLabelDraft((e?.label ?? "") || "");
   }, [selectedEdgeId, edges]);
 
@@ -629,11 +655,7 @@ export default function App() {
         if (!res.ok) {
           const msg = await res.text();
           await loadAll();
-          setError(
-            res.status === 409
-              ? "That edge already exists."
-              : `Failed to create edge (${res.status}): ${msg}`
-          );
+          setError(res.status === 409 ? "That edge already exists." : `Failed to create edge (${res.status}): ${msg}`);
           return;
         }
 
@@ -659,22 +681,19 @@ export default function App() {
     [authToken, loadAll, setEdges, setRfEdges]
   );
 
-
   const onEdgeDoubleClick = useCallback(
     async (_: unknown, rfEdge: RFEdge) => {
       const id = Number(rfEdge.id);
       if (!Number.isFinite(id)) return;
 
-      const current = edges.find(e => e.id === id);
+      const current = edges.find((e) => e.id === id);
       const currentType: EdgeTypeT = (current?.edge_type ?? "positive") as EdgeTypeT;
       const nextType = nextEdgeType(currentType);
 
-      setEdges(prev =>
-        prev.map(e => (e.id === id ? { ...e, edge_type: nextType } : e))
-      );
+      setEdges((prev) => prev.map((e) => (e.id === id ? { ...e, edge_type: nextType } : e)));
 
-      setRfEdges(prev =>
-        prev.map(e =>
+      setRfEdges((prev) =>
+        prev.map((e) =>
           e.id === rfEdge.id
             ? { ...e, style: { ...(e.style ?? {}), stroke: edgeStroke(nextType), strokeWidth: 2.5 } }
             : e
@@ -683,7 +702,9 @@ export default function App() {
 
       const ok = await updateEdgeBackend(id, { edge_type: nextType });
       if (!ok) {
-        setError("edge updated in ui, but backend did not accept the update (add a put/patch endpoint for edges to persist this).");
+        setError(
+          "edge updated in ui, but backend did not accept the update (add a put/patch endpoint for edges to persist this)."
+        );
       }
     },
     [edges, setEdges, setRfEdges, updateEdgeBackend]
@@ -694,17 +715,14 @@ export default function App() {
 
     const label = edgeLabelDraft.trim();
 
-    setEdges(prev =>
-      prev.map(e => (e.id === selectedEdgeId ? { ...e, label } : e))
-    );
-
-    setRfEdges(prev =>
-      prev.map(e => (Number(e.id) === selectedEdgeId ? { ...e, label } : e))
-    );
+    setEdges((prev) => prev.map((e) => (e.id === selectedEdgeId ? { ...e, label } : e)));
+    setRfEdges((prev) => prev.map((e) => (Number(e.id) === selectedEdgeId ? { ...e, label } : e)));
 
     const ok = await updateEdgeBackend(selectedEdgeId, { label });
     if (!ok) {
-      setError("label updated in ui, but backend did not accept the update (add a put/patch endpoint for edges to persist this).");
+      setError(
+        "label updated in ui, but backend did not accept the update (add a put/patch endpoint for edges to persist this)."
+      );
     }
   }, [edgeLabelDraft, selectedEdgeId, setEdges, setRfEdges, updateEdgeBackend]);
 
@@ -751,7 +769,6 @@ export default function App() {
       setError("Failed to create graph (network error)");
     }
   }, [newGraphTitle, me, selectedUserId, users, authToken]);
-
 
   //creates new node (technique) in backend for selected graph
   const createNode = useCallback(async () => {
@@ -809,7 +826,6 @@ export default function App() {
     }
   }, [selectedGraphId, authToken, newNodeName, setNodes, setRfNodes, persistPositions]);
 
-
   //groups all nodes together in a compact layout
   const groupNodesCenter = useCallback(() => {
     if (!selectedGraphId || rfNodes.length === 0) return;
@@ -848,6 +864,27 @@ export default function App() {
     }
   }, [rfNodes, selectedGraphId, setRfNodes, persistPositions]);
 
+  const focusNodeById = useCallback(
+    (nodeId: number) => {
+      const id = String(nodeId);
+      const found = rfNodes.find((n) => n.id === id);
+      if (!found) return;
+
+      setRfNodes((prev) =>
+        prev.map((n) => ({
+          ...n,
+          selected: n.id === id,
+        }))
+      );
+
+      const x = found.position.x + 37.5;
+      const y = found.position.y + 25;
+
+      rfInstance.current?.setCenter(x, y, { zoom: 1.1, duration: 350 });
+    },
+    [rfNodes, setRfNodes]
+  );
+
   useEffect(() => {
     if (!rfInstance.current) return;
 
@@ -863,11 +900,45 @@ export default function App() {
     });
   }, [rfNodes]);
 
-    if (!me) {
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      if (!isSearchOpen) return;
+      const el = searchWrapRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      if (e.target instanceof HTMLElement && el.contains(e.target)) return;
+      setIsSearchOpen(false);
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [isSearchOpen]);
+
+  if (!me) {
     return (
-      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-        <div style={{ width: 360, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontWeight: 800, fontSize: 18 }}>MatLogic</div>
+      <div
+        style={{
+          height: "100vh",
+          display: "grid",
+          placeItems: "center",
+          padding: 16,
+          background: theme === "dark" ? "#0b0f19" : "#f8fafc",
+          color: theme === "dark" ? "#e5e7eb" : "#111827",
+        }}
+      >
+        <div
+          style={{
+            width: 380,
+            borderRadius: 16,
+            border: theme === "dark" ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.08)",
+            background: theme === "dark" ? "#0f172a" : "#ffffff",
+            boxShadow: "0 12px 30px rgba(0,0,0,0.12)",
+            padding: 16,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
 
           <div style={{ display: "flex", gap: 8 }}>
             <button
@@ -876,7 +947,17 @@ export default function App() {
                 setAuthError(null);
               }}
               disabled={authLoading}
-              style={{ flex: 1 }}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                borderRadius: 12,
+                border: authMode === "login" ? "2px solid #ea580c" : "1px solid rgba(0,0,0,0.12)",
+                background: authMode === "login" ? "#fff7ed" : theme === "dark" ? "#111827" : "#ffffff",
+                color: theme === "dark" ? "#e5e7eb" : "#111827",
+                cursor: "pointer",
+                fontWeight: 700,
+                fontSize: 12,
+              }}
             >
               Login
             </button>
@@ -886,40 +967,73 @@ export default function App() {
                 setAuthError(null);
               }}
               disabled={authLoading}
-              style={{ flex: 1 }}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                borderRadius: 12,
+                border: authMode === "register" ? "2px solid #ea580c" : "1px solid rgba(0,0,0,0.12)",
+                background: authMode === "register" ? "#fff7ed" : theme === "dark" ? "#111827" : "#ffffff",
+                color: theme === "dark" ? "#e5e7eb" : "#111827",
+                cursor: "pointer",
+                fontWeight: 700,
+                fontSize: 12,
+              }}
             >
               Register
             </button>
           </div>
 
-          {authMode === "register" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {authMode === "register" && (
+              <input
+                value={authName}
+                onChange={(e) => setAuthName(e.target.value)}
+                placeholder="Name"
+                disabled={authLoading}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+                  background: theme === "dark" ? "#0b0f19" : "#ffffff",
+                  color: theme === "dark" ? "#e5e7eb" : "#111827",
+                  fontSize: 13,
+                }}
+              />
+            )}
+
             <input
-              value={authName}
-              onChange={(e) => setAuthName(e.target.value)}
-              placeholder="Name"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              placeholder="Email"
               disabled={authLoading}
-              style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db" }}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+                background: theme === "dark" ? "#0b0f19" : "#ffffff",
+                color: theme === "dark" ? "#e5e7eb" : "#111827",
+                fontSize: 13,
+              }}
             />
-          )}
 
-          <input
-            value={authEmail}
-            onChange={(e) => setAuthEmail(e.target.value)}
-            placeholder="Email"
-            disabled={authLoading}
-            style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db" }}
-          />
+            <input
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              placeholder="Password"
+              type="password"
+              disabled={authLoading}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+                background: theme === "dark" ? "#0b0f19" : "#ffffff",
+                color: theme === "dark" ? "#e5e7eb" : "#111827",
+                fontSize: 13,
+              }}
+            />
+          </div>
 
-          <input
-            value={authPassword}
-            onChange={(e) => setAuthPassword(e.target.value)}
-            placeholder="Password"
-            type="password"
-            disabled={authLoading}
-            style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db" }}
-          />
-
-          {authError && <div style={{ color: "crimson", fontSize: 13 }}>{authError}</div>}
+          {authError && <div style={{ color: "crimson", fontSize: 12 }}>{authError}</div>}
 
           <button
             disabled={authLoading}
@@ -972,111 +1086,344 @@ export default function App() {
                 setAuthLoading(false);
               }
             }}
-            style={{ padding: "10px 12px", borderRadius: 10 }}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(0,0,0,0.12)",
+              background: "#ea580c",
+              color: "#fff",
+              cursor: "pointer",
+              fontWeight: 800,
+              fontSize: 13,
+            }}
           >
             {authLoading ? "Please wait..." : authMode === "login" ? "Login" : "Register & Login"}
           </button>
+
+          <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.35 }}>
+            Tip: double-click a node to open its technique panel. Double-click an edge to cycle its type.
+          </div>
         </div>
       </div>
     );
   }
 
+  const ui = {
+    barShell: {
+      borderBottom: theme === "dark" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.10)",
+      background: theme === "dark" ? "#0b0f19" : "#ffffff",
+      color: theme === "dark" ? "#e5e7eb" : "#111827",
+    },
+    barHeader: {
+      padding: "8px 10px",
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+    },
+    barContent: {
+      padding: "0 10px 10px 10px",
+      display: "flex",
+      flexDirection: "column" as const,
+      gap: 8,
+      overflow: "hidden" as const,
+      transition: "max-height 260ms ease, opacity 200ms ease, transform 200ms ease",
+    },
+    row: {
+      display: "flex",
+      flexWrap: "wrap" as const,
+      gap: 8,
+      alignItems: "center",
+      justifyContent: "flex-start" as const,
+    },
+    label: { fontSize: 11, opacity: 0.75 },
+    input: {
+      padding: "6px 8px",
+      borderRadius: 10,
+      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+      background: theme === "dark" ? "#111827" : "#ffffff",
+      color: theme === "dark" ? "#e5e7eb" : "#111827",
+      fontSize: 12,
+      height: 30,
+    },
+    select: {
+      padding: "6px 8px",
+      borderRadius: 10,
+      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+      background: theme === "dark" ? "#111827" : "#ffffff",
+      color: theme === "dark" ? "#e5e7eb" : "#111827",
+      fontSize: 12,
+      height: 30,
+    },
+    button: {
+      padding: "6px 10px",
+      borderRadius: 10,
+      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+      background: theme === "dark" ? "#111827" : "#f8fafc",
+      color: theme === "dark" ? "#e5e7eb" : "#111827",
+      cursor: "pointer",
+      fontSize: 12,
+      fontWeight: 700,
+      height: 30,
+    },
+    iconButton: {
+      width: 30,
+      height: 30,
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 0,
+      borderRadius: 10,
+      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+      background: theme === "dark" ? "#111827" : "#f8fafc",
+      color: theme === "dark" ? "#e5e7eb" : "#111827",
+      cursor: "pointer",
+      fontSize: 14,
+      fontWeight: 900,
+    },
+    pill: {
+      padding: "6px 10px",
+      borderRadius: 999,
+      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+      background: theme === "dark" ? "#111827" : "#ffffff",
+      color: theme === "dark" ? "#e5e7eb" : "#111827",
+      fontSize: 12,
+      height: 30,
+    },
+  };
+
+  const contentOpenStyle = isMenuOpen
+    ? { maxHeight: 240, opacity: 1, transform: "translateY(0px)" }
+    : { maxHeight: 0, opacity: 0, transform: "translateY(-6px)", pointerEvents: "none" as const };
+
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: 12, borderBottom: "1px solid #ddd", display: "flex", gap: 12, alignItems: "center" }}>
-        <strong>MatLogic</strong>
-
-        <button onClick={() => void loadAll()}>Reload</button>
-
-        {error && <span style={{ color: "crimson" }}>{error}</span>}
-
-        <span style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
+    <div
+      style={{
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        paddingTop: "env(safe-area-inset-top)",
+      }}
+    >
+      <div style={ui.barShell}>
+        <div style={ui.barHeader}>
           <button
-            onClick={() => {
-              setToken(null);
-              setAuthToken(null);
-              setMe(null);
-              setUsers([]);
-              setGraphs([]);
-              setNodes([]);
-              setEdges([]);
-              setSelectedUserId(null);
-              setSelectedGraphId(null);
-            }}
+            onClick={() => setIsMenuOpen((v) => !v)}
+            title={isMenuOpen ? "Hide menu" : "Show menu"}
+            aria-label={isMenuOpen ? "Hide menu" : "Show menu"}
+            style={ui.iconButton}
           >
-            Logout
+            {isMenuOpen ? "▴" : "▾"}
           </button>
-          <span style={{ fontSize: 12, opacity: 0.8 }}>
-            Signed in as {me.email}
-          </span>
-        </span>
 
-        <span>
-          Graph:{" "}
-          <select
-            value={selectedGraphId ?? ""}
-            onChange={(e) => setSelectedGraphId(Number(e.target.value))}
-            disabled={graphs.length === 0}
-          >
-            {graphs.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.title}
-              </option>
-            ))}
-          </select>
-        </span>
+          <div style={{ fontWeight: 900, fontSize: 13, marginRight: 6 }}>MatLogic</div>
 
-        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={newGraphTitle}
-            onChange={(e) => setNewGraphTitle(e.target.value)}
-            placeholder="New graph title…"
-            style={{ width: 180 }}
-          />
-          <button onClick={() => void createGraph()}>Add graph</button>
-        </span>
-
-        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={newNodeName}
-            onChange={(e) => setNewNodeName(e.target.value)}
-            placeholder="New technique…"
-            style={{ width: 180 }}
-            disabled={!selectedGraphId}
-          />
-          <button onClick={() => void createNode()} disabled={!selectedGraphId}>
-            Add node
+          <button onClick={() => void loadAll()} style={ui.button}>
+            Reload
           </button>
-        </span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingLeft: 5}}>
+            <button
+              onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+              title="Toggle theme"
+              style={{
+                padding: "6px 10px",
+                borderRadius: 10,
+                border: theme === "dark" ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(0,0,0,0.12)",
+                background: theme === "dark" ? "#111827" : "#f8fafc",
+                color: theme === "dark" ? "#e5e7eb" : "#111827",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+            </button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingLeft: 5}}>
+            <button
+              onClick={groupNodesCenter}
+              disabled={!selectedGraphId || rfNodes.length === 0}
+              title="Group all nodes together"
+              style={{ ...ui.button, opacity: !selectedGraphId || rfNodes.length === 0 ? 0.5 : 1 }}
+            >
+              Group Nodes 📦
+            </button>
+          </div>
 
-        {selectedEdgeId != null && (
-          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              value={edgeLabelDraft}
-              onChange={(e) => setEdgeLabelDraft(e.target.value)}
-              placeholder="Edge label…"
-              style={{ width: 180 }}
-            />
-            <button onClick={() => void saveSelectedEdgeLabel()}>
-              Save label
+
+          {error && (
+            <span style={{ color: "crimson", fontSize: 12, marginLeft: 4, lineHeight: "30px" }}>{error}</span>
+          )}
+
+          <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, opacity: 0.85 }}>{me.email}</span>
+            <button
+              onClick={() => {
+                setToken(null);
+                setAuthToken(null);
+                setMe(null);
+                setUsers([]);
+                setGraphs([]);
+                setNodes([]);
+                setEdges([]);
+                setSelectedUserId(null);
+                setSelectedGraphId(null);
+              }}
+              style={ui.button}
+              title="Logout"
+            >
+              Logout
             </button>
           </span>
-        )}
+        </div>
 
-        <button
-          onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-          title="Toggle dark mode"
-        >
-          {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
-        </button>
+        <div style={{ ...ui.barContent, ...contentOpenStyle }}>
+          <div style={{ ...ui.row, paddingTop: 2 }}>
+            <span style={{ ...ui.pill, display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <span style={ui.label}>Graph</span>
+              <select
+                value={selectedGraphId ?? ""}
+                onChange={(e) => {
+                  setSelectedGraphId(Number(e.target.value));
+                  setSearchQuery("");
+                  setIsSearchOpen(false);
+                }}
+                disabled={graphs.length === 0}
+                style={ui.select}
+              >
+                {graphs.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.title}
+                  </option>
+                ))}
+              </select>
+            </span>
+                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <input
+                value={newGraphTitle}
+                onChange={(e) => setNewGraphTitle(e.target.value)}
+                placeholder="New graph…"
+                style={{ ...ui.input, width: 150 }}
+              />
+              <button onClick={() => void createGraph()} style={ui.button}>
+                Add graph
+              </button>
+            </span>
 
-        <button
-          onClick={groupNodesCenter}
-          disabled={!selectedGraphId || rfNodes.length === 0}
-          title="Group all nodes together"
-        >
-          📦 Group Nodes
-        </button>
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <input
+                value={newNodeName}
+                onChange={(e) => setNewNodeName(e.target.value)}
+                placeholder="New technique…"
+                disabled={!selectedGraphId}
+                style={{ ...ui.input, width: 170, opacity: !selectedGraphId ? 0.6 : 1 }}
+              />
+              <button
+                onClick={() => void createNode()}
+                disabled={!selectedGraphId}
+                style={{ ...ui.button, opacity: !selectedGraphId ? 0.5 : 1 }}
+              >
+                Add node
+              </button>
+            </span>
+
+            {selectedEdgeId != null && (
+              <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                <input
+                  value={edgeLabelDraft}
+                  onChange={(e) => setEdgeLabelDraft(e.target.value)}
+                  placeholder="Edge label…"
+                  style={{ ...ui.input, width: 170 }}
+                />
+                <button onClick={() => void saveSelectedEdgeLabel()} style={ui.button}>
+                  Save label
+                </button>
+              </span>
+            )}
+
+            <div
+              ref={searchWrapRef}
+              style={{
+                position: "relative",
+                display: "inline-flex",
+                gap: 6,
+                alignItems: "center",
+                marginLeft: 6,
+              }}
+            >
+              <input
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setIsSearchOpen(true);
+                }}
+                onFocus={() => setIsSearchOpen(true)}
+                placeholder="Search techniques…"
+                style={{ ...ui.input, width: 220 }}
+              />
+              {searchQuery.trim() && (
+                <button
+                  onClick={() => {
+                    setSearchQuery("");
+                    setIsSearchOpen(false);
+                    setRfNodes((prev) => prev.map((n) => ({ ...n, selected: false })));
+                  }}
+                  style={ui.button}
+                  title="Clear search"
+                >
+                  Clear
+                </button>
+              )}
+
+              {isSearchOpen && searchQuery.trim() && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 6px)",
+                    left: 0,
+                    width: 320,
+                    maxHeight: 260,
+                    overflow: "auto",
+                    borderRadius: 12,
+                    border: theme === "dark" ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(0,0,0,0.12)",
+                    background: theme === "dark" ? "#0b0f19" : "#ffffff",
+                    boxShadow: "0 10px 28px rgba(0,0,0,0.18)",
+                    padding: 6,
+                    zIndex: 50,
+                  }}
+                >
+                  {searchResults.length === 0 ? (
+                    <div style={{ padding: 10, fontSize: 12, opacity: 0.75 }}>No matches in this graph.</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {searchResults.map((n) => (
+                        <button
+                          key={n.id}
+                          onClick={async () => {
+                            setIsSearchOpen(false);
+                            focusNodeById(n.id);
+                            await openTechniquePanel(n.id);
+                          }}
+                          style={{
+                            textAlign: "left",
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: theme === "dark" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.10)",
+                            background: theme === "dark" ? "#111827" : "#fff7ed",
+                            color: theme === "dark" ? "#e5e7eb" : "#111827",
+                            cursor: "pointer",
+                          }}
+                          title="Jump to node & open technique"
+                        >
+                          <div style={{ fontWeight: 800, fontSize: 12 }}>{n.name}</div>
+                          <div style={{ fontSize: 11, opacity: 0.75 }}>Open technique panel</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div style={{ flex: 1 }}>
@@ -1099,11 +1446,12 @@ export default function App() {
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onSelectionChange={({ nodes, edges }) => {
-                setSelectedNodeIds(nodes.map(n => Number(n.id)));
-                setSelectedEdgeIds(edges.map(e => Number(e.id)));
+                setSelectedNodeIds(nodes.map((n) => Number(n.id)));
+                setSelectedEdgeIds(edges.map((e) => Number(e.id)));
               }}
               deleteKeyCode={null}
               fitView={false}
+              zoomOnDoubleClick={false}
             >
               <Background />
               <Controls />
@@ -1114,7 +1462,7 @@ export default function App() {
             <div
               style={{
                 width: 360,
-                borderLeft: "1px solid #ddd",
+                borderLeft: theme === "dark" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.10)",
                 padding: 12,
                 display: "flex",
                 flexDirection: "column",
@@ -1125,15 +1473,13 @@ export default function App() {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>
-                    {activeNode?.name ?? `Technique #${activeNodeId}`}
-                  </div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{activeNode?.name ?? `Technique #${activeNodeId}`}</div>
                   <div style={{ fontSize: 12, opacity: 0.75 }}>
                     Add a video link, then visualise it in first-person and write your steps.
                   </div>
                 </div>
 
-                <button onClick={closeTechniquePanel} title="Close">
+                <button onClick={closeTechniquePanel} title="Close" style={ui.button}>
                   ✕
                 </button>
               </div>
@@ -1147,20 +1493,16 @@ export default function App() {
                   style={{
                     width: "100%",
                     padding: "8px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #d1d5db",
+                    borderRadius: 10,
+                    border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
                     background: theme === "dark" ? "#111827" : "#fff",
                     color: theme === "dark" ? "#e5e7eb" : "#111827",
+                    fontSize: 13,
                   }}
                 />
 
                 {techVideoUrl.trim() && (
-                  <a
-                    href={techVideoUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ fontSize: 12 }}
-                  >
+                  <a href={techVideoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
                     Open video ↗
                   </a>
                 )}
@@ -1169,18 +1511,17 @@ export default function App() {
               <div
                 style={{
                   padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid #d1d5db",
+                  borderRadius: 12,
+                  border: theme === "dark" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.10)",
                   background: theme === "dark" ? "#0f172a" : "#fff7ed",
                   fontSize: 12,
                   lineHeight: 1.35,
                 }}
               >
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Prompt</div>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Prompt</div>
                 <div>
-                  Close your eyes for 10–20 seconds and imagine doing this technique in
-                  <b> first person</b>. Feel the grips, weight shift, hip angle, and
-                  timing. Then write the steps like you're coaching yourself.
+                  Close your eyes for 10–20 seconds and imagine doing this technique in <b>first person</b>. Feel the
+                  grips, weight shift, hip angle, and timing. Then write the steps like you're coaching yourself.
                 </div>
               </div>
 
@@ -1189,17 +1530,15 @@ export default function App() {
                 <textarea
                   value={techSteps}
                   onChange={(e) => setTechSteps(e.target.value)}
-                  placeholder={
-                    "Example:\n1) Establish grip…\n2) Shift hips…\n3) Off-balance…\n4) Finish…"
-                  }
+                  placeholder={"Example:\n1) Establish grip…\n2) Shift hips…\n3) Off-balance…\n4) Finish…"}
                   style={{
                     width: "100%",
                     flex: 1,
                     minHeight: 220,
                     resize: "vertical",
                     padding: "8px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #d1d5db",
+                    borderRadius: 12,
+                    border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
                     background: theme === "dark" ? "#111827" : "#fff",
                     color: theme === "dark" ? "#e5e7eb" : "#111827",
                     fontFamily: "inherit",
@@ -1218,6 +1557,7 @@ export default function App() {
                     });
                   }}
                   title="Save now"
+                  style={ui.button}
                 >
                   Save
                 </button>
@@ -1227,4 +1567,5 @@ export default function App() {
         </div>
       </div>
     </div>
-  )};
+  );
+}
