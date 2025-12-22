@@ -1,16 +1,22 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-
 
 from app.db.session import SessionLocal, get_db, engine
 from app.db.models import Base, Edge, User, Graph, Node, Technique, EdgeType
 from app.schemas import (
     UserCreate, UserRead,
+    Token, LoginRequest,
     GraphCreate, GraphRead,
     NodeCreate, NodeRead,
     EdgeCreate, EdgeRead, EdgeUpdate, EdgeType,
     TechniqueCreate, TechniqueRead, TechniqueUpdate
+)
+from app.security import (
+    hash_password,
+    authenticate_user,
+    create_access_token,
+    get_current_user,
 )
 
 app = FastAPI(title="MatsLogic API", version="0.1")
@@ -21,42 +27,85 @@ Base.metadata.create_all(bind=engine)
 def root():
     return {"app": "MatsLogic API", "status": "ok"}
 
-@app.post("/users/", response_model=UserRead)
+@app.post("/users/", response_model=UserRead, status_code=201)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = User(name=user.name, email=user.email)
+    existing = db.query(User).filter(User.email == user.email).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already registered")
+    db_user = User(
+        name=user.name,
+        email=user.email,
+        hashed_password=hash_password(user.password),
+    )
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     return db_user
 
 @app.get("/users/{user_id}", response_model=UserRead)
-def read_user(user_id: int, db: Session = Depends(get_db)):
+def read_user(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #get user using user id, return 404 if not found
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not allowed")
     db_user = db.query(User).filter(User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
     return db_user
 
+@app.post("/auth/register", response_model=UserRead, status_code=201)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == user.email).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    db_user = User(
+        name=user.name,
+        email=user.email,
+        hashed_password=hash_password(user.password),
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+@app.post("/auth/token", response_model=Token)
+def login_for_token(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = authenticate_user(db, payload.email, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token(subject=user.email)
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@app.get("/auth/me", response_model=UserRead)
+def read_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
 @app.post("/graphs/", response_model=GraphRead)
-def create_graph(graph: GraphCreate, db: Session = Depends(get_db)):
+def create_graph(graph: GraphCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #graph creation logic
-    db_graph = Graph(title=graph.title, user_id=graph.user_id)
+    db_graph = Graph(title=graph.title, user_id=current_user.id)
     db.add(db_graph)
     db.commit()
     db.refresh(db_graph)
     return db_graph
 
 @app.get("/graphs/{graph_id}", response_model=GraphRead)
-def read_graph(graph_id: int, db: Session = Depends(get_db)):
+def read_graph(graph_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #get graph using graph id, return 404 if not found
-    db_graph = db.query(Graph).filter(Graph.id == graph_id).first()
+    db_graph = db.query(Graph).filter(Graph.id == graph_id, Graph.user_id == current_user.id).first()
     if not db_graph:
         raise HTTPException(status_code=404, detail="Graph not found")
     return db_graph
 
 @app.post("/nodes/", response_model=NodeRead)
-def create_node(node: NodeCreate, db: Session = Depends(get_db)):
+def create_node(node: NodeCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #node creation logic
+    graph = db.query(Graph).filter(Graph.id == node.graph_id, Graph.user_id == current_user.id).first()
+    if graph is None:
+        raise HTTPException(status_code=404, detail="Graph not found")
     db_node = Node(name=node.name, graph_id=node.graph_id)
     db.add(db_node)
     db.commit()
@@ -64,16 +113,26 @@ def create_node(node: NodeCreate, db: Session = Depends(get_db)):
     return db_node
 
 @app.get("/nodes/{node_id}", response_model=NodeRead)
-def read_node(node_id: int, db: Session = Depends(get_db)):
+def read_node(node_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #get node using node id, return 404 if not found
-    db_node = db.query(Node).filter(Node.id == node_id).first()
+    db_node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     return db_node
 
 @app.delete("/nodes/{node_id}", status_code=204)
-def delete_node(node_id: int, db: Session = Depends(get_db)):
-    node = db.query(Node).filter(Node.id == node_id).first()
+def delete_node(node_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
 
@@ -90,13 +149,23 @@ def delete_node(node_id: int, db: Session = Depends(get_db)):
     return Response(status_code=204)
 
 @app.post("/edges/", response_model=EdgeRead)
-def create_edge(edge: EdgeCreate, db: Session = Depends(get_db)):
+def create_edge(edge: EdgeCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #edge creation logic - from one node to another
     #first checking origin and destination nodes exist
-    from_node = db.query(Node).filter(Node.id == edge.from_node_id).first()
+    from_node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == edge.from_node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if from_node is None:
         raise HTTPException(status_code=404, detail="Origin node not found")
-    to_node = db.query(Node).filter(Node.id == edge.to_node_id).first()
+    to_node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == edge.to_node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if to_node is None:
         raise HTTPException(status_code=404, detail="Destination node not found")
 
@@ -126,9 +195,15 @@ def create_edge(edge: EdgeCreate, db: Session = Depends(get_db)):
     return db_edge
 
 @app.get("/edges/{edge_id}", response_model=EdgeRead)
-def read_edge(edge_id: int, db: Session = Depends(get_db)):
+def read_edge(edge_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #get edge by id, return 404 if not found
-    db_edge = db.query(Edge).filter(Edge.id == edge_id).first()
+    db_edge = (
+        db.query(Edge)
+        .join(Node, Edge.from_node_id == Node.id)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Edge.id == edge_id, Graph.user_id == current_user.id)
+        .first()
+    )
 
     if db_edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
@@ -139,15 +214,26 @@ def read_edge(edge_id: int, db: Session = Depends(get_db)):
 def get_next_nodes(
     node_id: int, 
     db: Session = Depends(get_db),
-    edge_type: EdgeType | None = Query(None, description="filter by edge type")
+    edge_type: EdgeType | None = Query(None, description="filter by edge type"),
+    current_user: User = Depends(get_current_user),
 ):
     #return all nodes directly reachable (1 step)
-    node = db.query(Node).filter(Node.id == node_id).first()
+    node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
 
     #outgoing edges with optional type filter
-    q = db.query(Edge).filter(Edge.from_node_id == node_id)
+    q = (
+        db.query(Edge)
+        .join(Node, Edge.from_node_id == Node.id)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Edge.from_node_id == node_id, Graph.user_id == current_user.id)
+    )
     if edge_type is not None:
         q = q.filter(Edge.edge_type == edge_type)
     
@@ -157,13 +243,24 @@ def get_next_nodes(
     to_node_ids = [edge.to_node_id for edge in edges]
     if not to_node_ids:
         return []
-    next_nodes = db.query(Node).filter(Node.id.in_(to_node_ids)).all()
+    next_nodes = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id.in_(to_node_ids), Graph.user_id == current_user.id)
+        .all()
+    )
 
     return next_nodes
 
 @app.delete("/edges/{edge_id}", status_code=204)
-def delete_edge(edge_id: int, db: Session = Depends(get_db)):
-    edge = db.query(Edge).filter(Edge.id == edge_id).first()
+def delete_edge(edge_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    edge = (
+        db.query(Edge)
+        .join(Node, Edge.from_node_id == Node.id)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Edge.id == edge_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
 
@@ -173,9 +270,14 @@ def delete_edge(edge_id: int, db: Session = Depends(get_db)):
 
 #TECHNIQUE ENDPOINTS
 @app.get("/nodes/{node_id}/technique", response_model=TechniqueRead)
-def get_technique(node_id: int, db: Session = Depends(get_db)):
+def get_technique(node_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #get technique data for a node
-    node = db.query(Node).filter(Node.id == node_id).first()
+    node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     
@@ -186,9 +288,14 @@ def get_technique(node_id: int, db: Session = Depends(get_db)):
     return technique
 
 @app.post("/nodes/{node_id}/technique", response_model=TechniqueRead)
-def create_technique(node_id: int, technique: TechniqueCreate, db: Session = Depends(get_db)):
+def create_technique(node_id: int, technique: TechniqueCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #create technique data for a node
-    node = db.query(Node).filter(Node.id == node_id).first()
+    node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     
@@ -208,9 +315,14 @@ def create_technique(node_id: int, technique: TechniqueCreate, db: Session = Dep
     return db_technique
 
 @app.put("/nodes/{node_id}/technique", response_model=TechniqueRead)
-def update_technique(node_id: int, technique: TechniqueUpdate, db: Session = Depends(get_db)):
+def update_technique(node_id: int, technique: TechniqueUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #update technique data for a node
-    node = db.query(Node).filter(Node.id == node_id).first()
+    node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == node_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     
@@ -228,8 +340,16 @@ def update_technique(node_id: int, technique: TechniqueUpdate, db: Session = Dep
     return db_technique
 
 @app.delete("/nodes/{node_id}/technique", status_code=204)
-def delete_technique(node_id: int, db: Session = Depends(get_db)):
+def delete_technique(node_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     #delete technique data for a node
+    node = (
+        db.query(Node)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Node.id == node_id, Graph.user_id == current_user.id)
+        .first()
+    )
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
     technique = db.query(Technique).filter(Technique.node_id == node_id).first()
     if technique is None:
         raise HTTPException(status_code=404, detail="Technique not found")
@@ -244,8 +364,9 @@ def list_users(
     db: Session = Depends(get_db),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
 ):
-    return db.query(User).order_by(User.id).offset(offset).limit(limit).all()
+    return [current_user]
 
 @app.get("/graphs/", response_model=list[GraphRead])
 def list_graphs(
@@ -253,10 +374,9 @@ def list_graphs(
     user_id: int | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Graph)
-    if user_id is not None:
-        q = q.filter(Graph.user_id == user_id)
+    q = db.query(Graph).filter(Graph.user_id == current_user.id)
     return q.order_by(Graph.id).offset(offset).limit(limit).all()
 
 @app.get("/nodes/", response_model=list[NodeRead])
@@ -265,15 +385,22 @@ def list_nodes(
     graph_id: int | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Node)
+    q = db.query(Node).join(Graph, Node.graph_id == Graph.id).filter(Graph.user_id == current_user.id)
     if graph_id is not None:
         q = q.filter(Node.graph_id == graph_id)
     return q.order_by(Node.id).offset(offset).limit(limit).all()
 
 @app.put("/edges/{edge_id}", response_model=EdgeRead)
-def update_edge(edge_id: int, patch: EdgeUpdate, db: Session = Depends(get_db)):
-    db_edge = db.query(Edge).filter(Edge.id == edge_id).first()
+def update_edge(edge_id: int, patch: EdgeUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    db_edge = (
+        db.query(Edge)
+        .join(Node, Edge.from_node_id == Node.id)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Edge.id == edge_id, Graph.user_id == current_user.id)
+        .first()
+    )
     if db_edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
 
@@ -302,8 +429,14 @@ def list_edges(
     edge_type: EdgeType | None = Query(None, description="filter by edge type"),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Edge)
+    q = (
+        db.query(Edge)
+        .join(Node, Edge.from_node_id == Node.id)
+        .join(Graph, Node.graph_id == Graph.id)
+        .filter(Graph.user_id == current_user.id)
+    )
 
     if from_node_id is not None:
         q = q.filter(Edge.from_node_id == from_node_id)
@@ -313,6 +446,6 @@ def list_edges(
         q = q.filter(Edge.edge_type == edge_type)
 
     if graph_id is not None:
-        q = q.join(Node, Edge.from_node_id == Node.id).filter(Node.graph_id == graph_id)
+        q = q.filter(Node.graph_id == graph_id)
 
     return q.order_by(Edge.id).offset(offset).limit(limit).all()

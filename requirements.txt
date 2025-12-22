@@ -2,3 +2,8 @@ fastapi
 uvicorn
 SQLAlchemy
 psycopg2-binary
+pydantic[email]
+python-jose[cryptography]
+passlib[argon2]
+pydantic[email]
+

@@ -25,6 +25,22 @@ type User = {
   email: string;
 };
 
+type Token = {
+  access_token: string;
+  token_type: string;
+};
+
+type LoginRequest = {
+  email: string;
+  password: string;
+};
+
+type RegisterRequest = {
+  name: string;
+  email: string;
+  password: string;
+};
+
 type Graph = {
   id: number;
   title: string;
@@ -54,6 +70,57 @@ type TechniqueDraft = {
 };
 
 const API_BASE = "/api";
+const TOKEN_KEY = "matlogic:token";
+
+function getToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setToken(token: string | null) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+  }
+}
+
+async function apiFetch(path: string, init: RequestInit = {}, token?: string | null) {
+  const headers = new Headers(init.headers || {});
+  if (!headers.has("Content-Type") && init.body != null) headers.set("Content-Type", "application/json");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(`${API_BASE}${path}`, { ...init, headers });
+}
+
+async function fetchMe(token: string) {
+  const res = await apiFetch("/auth/me", {}, token);
+  if (!res.ok) return null;
+  return (await res.json()) as User;
+}
+
+async function login(email: string, password: string) {
+  const res = await apiFetch("/auth/token", {
+    method: "POST",
+    body: JSON.stringify({ email, password } satisfies LoginRequest),
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as Token;
+}
+
+async function register(name: string, email: string, password: string) {
+  const res = await apiFetch("/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ name, email, password } satisfies RegisterRequest),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Register failed (${res.status})`);
+  }
+  return (await res.json()) as User;
+}
 
 //generates localStorage key for node positions per graph
 function posKey(graphId: number) {
@@ -208,6 +275,17 @@ export default function App() {
 
   const [error, setError] = useState<string | null>(null);
 
+  //security
+  const [authToken, setAuthToken] = useState<string | null>(() => getToken());
+  const [me, setMe] = useState<User | null>(null);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+
+
   //deleting nodes/edges state
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<number[]>([]);
@@ -247,8 +325,6 @@ export default function App() {
   //debounced autosave for technique drafts
   const techniqueSaveTimer = useRef<number | null>(null);
 
-  //new edge comments, do not use capital letters or whitespace after //
-  //edge label editing state
   const [edgeLabelDraft, setEdgeLabelDraft] = useState("");
   const selectedEdgeId = selectedEdgeIds.length === 1 ? selectedEdgeIds[0] : null;
 
@@ -292,15 +368,36 @@ export default function App() {
     };
   }, [techVideoUrl, techSteps, activeNodeId, isPanelOpen]);
 
+  useEffect(() => {
+    const t = authToken;
+    if (!t) {
+      setMe(null);
+      return;
+    }
+    (async () => {
+      const u = await fetchMe(t);
+      if (!u) {
+        setToken(null);
+        setAuthToken(null);
+        setMe(null);
+        return;
+      }
+      setMe(u);
+    })();
+  }, [authToken]);
+
+
   //fetches all data from backend and sets defaults
   const loadAll = useCallback(async () => {
     setError(null);
     try {
+      if (!authToken) return;
+
       const [u, g, n, e] = await Promise.all([
-        fetch(`${API_BASE}/users/`).then((r) => r.json()),
-        fetch(`${API_BASE}/graphs/`).then((r) => r.json()),
-        fetch(`${API_BASE}/nodes/`).then((r) => r.json()),
-        fetch(`${API_BASE}/edges/`).then((r) => r.json()),
+        apiFetch(`/users/`, {}, authToken).then((r) => r.json()),
+        apiFetch(`/graphs/`, {}, authToken).then((r) => r.json()),
+        apiFetch(`/nodes/`, {}, authToken).then((r) => r.json()),
+        apiFetch(`/edges/`, {}, authToken).then((r) => r.json()),
       ]);
 
       setUsers(u);
@@ -313,11 +410,13 @@ export default function App() {
     } catch {
       setError("Failed to load data from backend");
     }
-  }, [selectedGraphId, selectedUserId]);
+  }, [authToken, selectedGraphId, selectedUserId]);
+
 
   useEffect(() => {
+    if (!me) return;
     void loadAll();
-  }, [loadAll]);
+  }, [me, loadAll]);
 
   //deletes nodes and their connected edges both in backend and local state
   async function deleteNodesById(ids: number[]) {
@@ -458,23 +557,27 @@ export default function App() {
     [onEdgesChangeBase]
   );
 
-  //new edge comments, do not use capital letters or whitespace after //
-  //tries to persist edge updates; if backend doesn't support it, ui still updates
-  const updateEdgeBackend = useCallback(async (edgeId: number, patch: Partial<EdgeT>) => {
-    try {
-      const res = await fetch(`${API_BASE}/edges/${edgeId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }, []);
+  const updateEdgeBackend = useCallback(
+    async (edgeId: number, patch: Partial<EdgeT>) => {
+      if (!authToken) return false;
+      try {
+        const res = await apiFetch(
+          `/edges/${edgeId}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(patch),
+          },
+          authToken
+        );
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+    [authToken]
+  );
 
-  //new edge comments, do not use capital letters or whitespace after //
-  //sync label draft when selection changes
+
   useEffect(() => {
     if (selectedEdgeId == null) {
       setEdgeLabelDraft("");
@@ -488,6 +591,11 @@ export default function App() {
   const onConnect = useCallback(
     async (connection: Connection) => {
       setError(null);
+
+      if (!authToken) {
+        setError("Not authenticated.");
+        return;
+      }
 
       if (!connection.source || !connection.target) return;
       const fromId = Number(connection.source);
@@ -505,15 +613,18 @@ export default function App() {
       );
 
       try {
-        const res = await fetch(`${API_BASE}/edges/`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            from_node_id: fromId,
-            to_node_id: toId,
-            edge_type: "positive",
-          }),
-        });
+        const res = await apiFetch(
+          `/edges/`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              from_node_id: fromId,
+              to_node_id: toId,
+              edge_type: "positive",
+            }),
+          },
+          authToken
+        );
 
         if (!res.ok) {
           const msg = await res.text();
@@ -545,11 +656,10 @@ export default function App() {
         setError("Failed to create edge (network error)");
       }
     },
-    [loadAll, setEdges, setRfEdges]
+    [authToken, loadAll, setEdges, setRfEdges]
   );
 
-  //new edge comments, do not use capital letters or whitespace after //
-  //double click edge to cycle type + color
+
   const onEdgeDoubleClick = useCallback(
     async (_: unknown, rfEdge: RFEdge) => {
       const id = Number(rfEdge.id);
@@ -579,8 +689,6 @@ export default function App() {
     [edges, setEdges, setRfEdges, updateEdgeBackend]
   );
 
-  //new edge comments, do not use capital letters or whitespace after //
-  //save edge label for the currently selected edge
   const saveSelectedEdgeLabel = useCallback(async () => {
     if (selectedEdgeId == null) return;
 
@@ -604,23 +712,30 @@ export default function App() {
   const createGraph = useCallback(async () => {
     setError(null);
     const title = newGraphTitle.trim();
-    const userId = selectedUserId ?? users[0]?.id;
+    const userId = me?.id ?? selectedUserId ?? users[0]?.id;
 
     if (!title) {
       setError("Graph title cannot be empty.");
       return;
     }
     if (!userId) {
-      setError("No user available to attach the graph to. Create a user first.");
+      setError("No user available to attach the graph to.");
+      return;
+    }
+    if (!authToken) {
+      setError("Not authenticated.");
       return;
     }
 
     try {
-      const res = await fetch(`${API_BASE}/graphs/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, user_id: userId }),
-      });
+      const res = await apiFetch(
+        `/graphs/`,
+        {
+          method: "POST",
+          body: JSON.stringify({ title, user_id: userId }),
+        },
+        authToken
+      );
 
       if (!res.ok) {
         const msg = await res.text();
@@ -635,13 +750,18 @@ export default function App() {
     } catch {
       setError("Failed to create graph (network error)");
     }
-  }, [newGraphTitle, selectedUserId, users]);
+  }, [newGraphTitle, me, selectedUserId, users, authToken]);
+
 
   //creates new node (technique) in backend for selected graph
   const createNode = useCallback(async () => {
     setError(null);
     if (!selectedGraphId) {
       setError("Select a graph first.");
+      return;
+    }
+    if (!authToken) {
+      setError("Not authenticated.");
       return;
     }
 
@@ -652,11 +772,14 @@ export default function App() {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/nodes/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, graph_id: selectedGraphId }),
-      });
+      const res = await apiFetch(
+        `/nodes/`,
+        {
+          method: "POST",
+          body: JSON.stringify({ name, graph_id: selectedGraphId }),
+        },
+        authToken
+      );
 
       if (!res.ok) {
         const msg = await res.text();
@@ -684,7 +807,8 @@ export default function App() {
     } catch {
       setError("Failed to create node (network error)");
     }
-  }, [newNodeName, persistPositions, selectedGraphId, setNodes, setRfNodes]);
+  }, [selectedGraphId, authToken, newNodeName, setNodes, setRfNodes, persistPositions]);
+
 
   //groups all nodes together in a compact layout
   const groupNodesCenter = useCallback(() => {
@@ -739,6 +863,124 @@ export default function App() {
     });
   }, [rfNodes]);
 
+    if (!me) {
+    return (
+      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <div style={{ width: 360, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontWeight: 800, fontSize: 18 }}>MatLogic</div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => {
+                setAuthMode("login");
+                setAuthError(null);
+              }}
+              disabled={authLoading}
+              style={{ flex: 1 }}
+            >
+              Login
+            </button>
+            <button
+              onClick={() => {
+                setAuthMode("register");
+                setAuthError(null);
+              }}
+              disabled={authLoading}
+              style={{ flex: 1 }}
+            >
+              Register
+            </button>
+          </div>
+
+          {authMode === "register" && (
+            <input
+              value={authName}
+              onChange={(e) => setAuthName(e.target.value)}
+              placeholder="Name"
+              disabled={authLoading}
+              style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db" }}
+            />
+          )}
+
+          <input
+            value={authEmail}
+            onChange={(e) => setAuthEmail(e.target.value)}
+            placeholder="Email"
+            disabled={authLoading}
+            style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db" }}
+          />
+
+          <input
+            value={authPassword}
+            onChange={(e) => setAuthPassword(e.target.value)}
+            placeholder="Password"
+            type="password"
+            disabled={authLoading}
+            style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #d1d5db" }}
+          />
+
+          {authError && <div style={{ color: "crimson", fontSize: 13 }}>{authError}</div>}
+
+          <button
+            disabled={authLoading}
+            onClick={async () => {
+              setAuthError(null);
+              setAuthLoading(true);
+              try {
+                if (authMode === "register") {
+                  const name = authName.trim();
+                  const email = authEmail.trim();
+                  const password = authPassword;
+                  if (!name || !email || !password) {
+                    setAuthError("Fill in all fields.");
+                    setAuthLoading(false);
+                    return;
+                  }
+                  await register(name, email, password);
+                }
+
+                const email = authEmail.trim();
+                const password = authPassword;
+                if (!email || !password) {
+                  setAuthError("Enter email and password.");
+                  setAuthLoading(false);
+                  return;
+                }
+
+                const tok = await login(email, password);
+                if (!tok?.access_token) {
+                  setAuthError("Invalid email or password.");
+                  setAuthLoading(false);
+                  return;
+                }
+
+                setToken(tok.access_token);
+                setAuthToken(tok.access_token);
+
+                const u = await fetchMe(tok.access_token);
+                if (!u) {
+                  setAuthError("Login succeeded but failed to fetch profile.");
+                  setAuthLoading(false);
+                  return;
+                }
+                setMe(u);
+
+                setAuthPassword("");
+              } catch (e) {
+                setAuthError(e instanceof Error ? e.message : "Authentication failed.");
+              } finally {
+                setAuthLoading(false);
+              }
+            }}
+            style={{ padding: "10px 12px", borderRadius: 10 }}
+          >
+            {authLoading ? "Please wait..." : authMode === "login" ? "Login" : "Register & Login"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: 12, borderBottom: "1px solid #ddd", display: "flex", gap: 12, alignItems: "center" }}>
@@ -748,19 +990,25 @@ export default function App() {
 
         {error && <span style={{ color: "crimson" }}>{error}</span>}
 
-        <span style={{ marginLeft: "auto" }}>
-          User:{" "}
-          <select
-            value={selectedUserId ?? ""}
-            onChange={(e) => setSelectedUserId(Number(e.target.value))}
-            disabled={users.length === 0}
+        <span style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            onClick={() => {
+              setToken(null);
+              setAuthToken(null);
+              setMe(null);
+              setUsers([]);
+              setGraphs([]);
+              setNodes([]);
+              setEdges([]);
+              setSelectedUserId(null);
+              setSelectedGraphId(null);
+            }}
           >
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name} ({u.email})
-              </option>
-            ))}
-          </select>
+            Logout
+          </button>
+          <span style={{ fontSize: 12, opacity: 0.8 }}>
+            Signed in as {me.email}
+          </span>
         </span>
 
         <span>
@@ -814,7 +1062,7 @@ export default function App() {
             </button>
           </span>
         )}
-        
+
         <button
           onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
           title="Toggle dark mode"
@@ -979,5 +1227,4 @@ export default function App() {
         </div>
       </div>
     </div>
-  );
-}
+  )};
