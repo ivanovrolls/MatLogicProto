@@ -72,3 +72,7 @@ MatLogic is built around a simple idea:
 
 This tool is not meant to replace training. It exists to **supplement it**, the way I have done so, for years.
 
+## Development Notes
+This project uses AI assistance for accelerating development of the React Flow integration and UI components. Backend architecture and 
+domain logic are original work. This project is intended to help me familiarise myself with the React Flow framework and how it interacts with backend architectures.
+Some of the CSS such as the drop down menu was pulled from previous projects.
