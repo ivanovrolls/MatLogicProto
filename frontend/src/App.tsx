@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "./api";
+import { fetchMe, login, register } from "./auth";
+
 import ReactFlow, {
   Background,
   Controls,
@@ -16,29 +19,8 @@ import type {
   Node as RFNode,
   ReactFlowInstance,
 } from "reactflow";
+import TopBar from "./TopBar";
 import "reactflow/dist/style.css";
-
-type User = {
-  id: number;
-  name: string;
-  email: string;
-};
-
-type Token = {
-  access_token: string;
-  token_type: string;
-};
-
-type LoginRequest = {
-  email: string;
-  password: string;
-};
-
-type RegisterRequest = {
-  name: string;
-  email: string;
-  password: string;
-};
 
 type Graph = {
   id: number;
@@ -85,40 +67,6 @@ function setToken(token: string | null) {
     else localStorage.removeItem(TOKEN_KEY);
   } catch {
   }
-}
-
-async function apiFetch(path: string, init: RequestInit = {}, token?: string | null) {
-  const headers = new Headers(init.headers || {});
-  if (!headers.has("Content-Type") && init.body != null) headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(`${API_BASE}${path}`, { ...init, headers });
-}
-
-async function fetchMe(token: string) {
-  const res = await apiFetch("/auth/me", {}, token);
-  if (!res.ok) return null;
-  return (await res.json()) as User;
-}
-
-async function login(email: string, password: string) {
-  const res = await apiFetch("/auth/token", {
-    method: "POST",
-    body: JSON.stringify({ email, password } satisfies LoginRequest),
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as Token;
-}
-
-async function register(name: string, email: string, password: string) {
-  const res = await apiFetch("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ name, email, password } satisfies RegisterRequest),
-  });
-  if (!res.ok) {
-    const msg = await res.text();
-    throw new Error(msg || `Register failed (${res.status})`);
-  }
-  return (await res.json()) as User;
 }
 
 //generates localStorage key for node positions per graph
@@ -318,6 +266,93 @@ export default function App() {
     return saved === "dark" ? "dark" : "light";
   });
 
+  //top bar ui
+  const ui = useMemo(
+    () => ({
+      barShell: {
+        borderBottom: theme === "dark" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.10)",
+        background: theme === "dark" ? "#0b0f19" : "#ffffff",
+        color: theme === "dark" ? "#e5e7eb" : "#111827",
+      },
+      barHeader: {
+        padding: "8px 10px",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+      },
+      barContent: {
+        padding: "0 10px 10px 10px",
+        display: "flex",
+        flexDirection: "column" as const,
+        gap: 8,
+        overflow: "hidden" as const,
+        transition: "max-height 260ms ease, opacity 200ms ease, transform 200ms ease",
+      },
+      row: {
+        display: "flex",
+        flexWrap: "wrap" as const,
+        gap: 8,
+        alignItems: "center",
+        justifyContent: "flex-start" as const,
+      },
+      label: { fontSize: 11, opacity: 0.75 },
+      input: {
+        padding: "6px 8px",
+        borderRadius: 10,
+        border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+        background: theme === "dark" ? "#111827" : "#ffffff",
+        color: theme === "dark" ? "#e5e7eb" : "#111827",
+        fontSize: 12,
+        height: 30,
+      },
+      select: {
+        padding: "6px 8px",
+        borderRadius: 10,
+        border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+        background: theme === "dark" ? "#111827" : "#ffffff",
+        color: theme === "dark" ? "#e5e7eb" : "#111827",
+        fontSize: 12,
+        height: 30,
+      },
+      button: {
+        padding: "6px 10px",
+        borderRadius: 10,
+        border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+        background: theme === "dark" ? "#111827" : "#f8fafc",
+        color: theme === "dark" ? "#e5e7eb" : "#111827",
+        cursor: "pointer",
+        fontSize: 12,
+        fontWeight: 700,
+        height: 30,
+      },
+      iconButton: {
+        width: 30,
+        height: 30,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 0,
+        borderRadius: 10,
+        border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+        background: theme === "dark" ? "#111827" : "#f8fafc",
+        color: theme === "dark" ? "#e5e7eb" : "#111827",
+        cursor: "pointer",
+        fontSize: 14,
+        fontWeight: 900,
+      },
+      pill: {
+        padding: "6px 10px",
+        borderRadius: 999,
+        border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
+        background: theme === "dark" ? "#111827" : "#ffffff",
+        color: theme === "dark" ? "#e5e7eb" : "#111827",
+        fontSize: 12,
+        height: 30,
+      },
+    }),
+    [theme]
+  );
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("matlogic:theme", theme);
@@ -337,7 +372,7 @@ export default function App() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const searchWrapRef = useRef<HTMLDivElement | null>(null);
+  const searchWrapRef = useRef<HTMLDivElement>(null);
 
   const [isMenuOpen, setIsMenuOpen] = useState(true);
 
@@ -425,6 +460,19 @@ export default function App() {
     if (!me) return;
     void loadAll();
   }, [me, loadAll]);
+
+  //logout handler for topbar
+  const onLogout = useCallback(() => {
+    setToken(null);
+    setAuthToken(null);
+    setMe(null);
+    setUsers([]);
+    setGraphs([]);
+    setNodes([]);
+    setEdges([]);
+    setSelectedUserId(null);
+    setSelectedGraphId(null);
+  }, []);
 
   //deletes nodes and their connected edges both in backend and local state
   async function deleteNodesById(ids: number[]) {
@@ -527,8 +575,7 @@ export default function App() {
 
     const nextRfEdges: RFEdge[] = graphEdges.map((e) => {
       const dimmed =
-        matchingNodeIds.size > 0 &&
-        (!matchingNodeIds.has(e.from_node_id) || !matchingNodeIds.has(e.to_node_id));
+        matchingNodeIds.size > 0 && (!matchingNodeIds.has(e.from_node_id) || !matchingNodeIds.has(e.to_node_id));
 
       return {
         id: String(e.id),
@@ -694,9 +741,7 @@ export default function App() {
 
       setRfEdges((prev) =>
         prev.map((e) =>
-          e.id === rfEdge.id
-            ? { ...e, style: { ...(e.style ?? {}), stroke: edgeStroke(nextType), strokeWidth: 2.5 } }
-            : e
+          e.id === rfEdge.id ? { ...e, style: { ...(e.style ?? {}), stroke: edgeStroke(nextType), strokeWidth: 2.5 } } : e
         )
       );
 
@@ -939,7 +984,6 @@ export default function App() {
             gap: 10,
           }}
         >
-
           <div style={{ display: "flex", gap: 8 }}>
             <button
               onClick={() => {
@@ -1108,93 +1152,6 @@ export default function App() {
     );
   }
 
-  const ui = {
-    barShell: {
-      borderBottom: theme === "dark" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.10)",
-      background: theme === "dark" ? "#0b0f19" : "#ffffff",
-      color: theme === "dark" ? "#e5e7eb" : "#111827",
-    },
-    barHeader: {
-      padding: "8px 10px",
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-    },
-    barContent: {
-      padding: "0 10px 10px 10px",
-      display: "flex",
-      flexDirection: "column" as const,
-      gap: 8,
-      overflow: "hidden" as const,
-      transition: "max-height 260ms ease, opacity 200ms ease, transform 200ms ease",
-    },
-    row: {
-      display: "flex",
-      flexWrap: "wrap" as const,
-      gap: 8,
-      alignItems: "center",
-      justifyContent: "flex-start" as const,
-    },
-    label: { fontSize: 11, opacity: 0.75 },
-    input: {
-      padding: "6px 8px",
-      borderRadius: 10,
-      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
-      background: theme === "dark" ? "#111827" : "#ffffff",
-      color: theme === "dark" ? "#e5e7eb" : "#111827",
-      fontSize: 12,
-      height: 30,
-    },
-    select: {
-      padding: "6px 8px",
-      borderRadius: 10,
-      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
-      background: theme === "dark" ? "#111827" : "#ffffff",
-      color: theme === "dark" ? "#e5e7eb" : "#111827",
-      fontSize: 12,
-      height: 30,
-    },
-    button: {
-      padding: "6px 10px",
-      borderRadius: 10,
-      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
-      background: theme === "dark" ? "#111827" : "#f8fafc",
-      color: theme === "dark" ? "#e5e7eb" : "#111827",
-      cursor: "pointer",
-      fontSize: 12,
-      fontWeight: 700,
-      height: 30,
-    },
-    iconButton: {
-      width: 30,
-      height: 30,
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 0,
-      borderRadius: 10,
-      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
-      background: theme === "dark" ? "#111827" : "#f8fafc",
-      color: theme === "dark" ? "#e5e7eb" : "#111827",
-      cursor: "pointer",
-      fontSize: 14,
-      fontWeight: 900,
-    },
-    pill: {
-      padding: "6px 10px",
-      borderRadius: 999,
-      border: theme === "dark" ? "1px solid rgba(255,255,255,0.14)" : "1px solid rgba(0,0,0,0.14)",
-      background: theme === "dark" ? "#111827" : "#ffffff",
-      color: theme === "dark" ? "#e5e7eb" : "#111827",
-      fontSize: 12,
-      height: 30,
-    },
-  };
-
-  const contentOpenStyle = isMenuOpen
-    ? { maxHeight: 240, opacity: 1, transform: "translateY(0px)" }
-    : { maxHeight: 0, opacity: 0, transform: "translateY(-6px)", pointerEvents: "none" as const };
-
   return (
     <div
       style={{
@@ -1204,227 +1161,41 @@ export default function App() {
         paddingTop: "env(safe-area-inset-top)",
       }}
     >
-      <div style={ui.barShell}>
-        <div style={ui.barHeader}>
-          <button
-            onClick={() => setIsMenuOpen((v) => !v)}
-            title={isMenuOpen ? "Hide menu" : "Show menu"}
-            aria-label={isMenuOpen ? "Hide menu" : "Show menu"}
-            style={ui.iconButton}
-          >
-            {isMenuOpen ? "▴" : "▾"}
-          </button>
-
-          <div style={{ fontWeight: 900, fontSize: 13, marginRight: 6 }}>MatLogic</div>
-
-          <button onClick={() => void loadAll()} style={ui.button}>
-            Reload
-          </button>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingLeft: 5}}>
-            <button
-              onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-              title="Toggle theme"
-              style={{
-                padding: "6px 10px",
-                borderRadius: 10,
-                border: theme === "dark" ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(0,0,0,0.12)",
-                background: theme === "dark" ? "#111827" : "#f8fafc",
-                color: theme === "dark" ? "#e5e7eb" : "#111827",
-                cursor: "pointer",
-                fontSize: 12,
-              }}
-            >
-              {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
-            </button>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingLeft: 5}}>
-            <button
-              onClick={groupNodesCenter}
-              disabled={!selectedGraphId || rfNodes.length === 0}
-              title="Group all nodes together"
-              style={{ ...ui.button, opacity: !selectedGraphId || rfNodes.length === 0 ? 0.5 : 1 }}
-            >
-              Group Nodes 📦
-            </button>
-          </div>
-
-
-          {error && (
-            <span style={{ color: "crimson", fontSize: 12, marginLeft: 4, lineHeight: "30px" }}>{error}</span>
-          )}
-
-          <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 12, opacity: 0.85 }}>{me.email}</span>
-            <button
-              onClick={() => {
-                setToken(null);
-                setAuthToken(null);
-                setMe(null);
-                setUsers([]);
-                setGraphs([]);
-                setNodes([]);
-                setEdges([]);
-                setSelectedUserId(null);
-                setSelectedGraphId(null);
-              }}
-              style={ui.button}
-              title="Logout"
-            >
-              Logout
-            </button>
-          </span>
-        </div>
-
-        <div style={{ ...ui.barContent, ...contentOpenStyle }}>
-          <div style={{ ...ui.row, paddingTop: 2 }}>
-            <span style={{ ...ui.pill, display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <span style={ui.label}>Graph</span>
-              <select
-                value={selectedGraphId ?? ""}
-                onChange={(e) => {
-                  setSelectedGraphId(Number(e.target.value));
-                  setSearchQuery("");
-                  setIsSearchOpen(false);
-                }}
-                disabled={graphs.length === 0}
-                style={ui.select}
-              >
-                {graphs.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.title}
-                  </option>
-                ))}
-              </select>
-            </span>
-                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-              <input
-                value={newGraphTitle}
-                onChange={(e) => setNewGraphTitle(e.target.value)}
-                placeholder="New graph…"
-                style={{ ...ui.input, width: 150 }}
-              />
-              <button onClick={() => void createGraph()} style={ui.button}>
-                Add graph
-              </button>
-            </span>
-
-            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-              <input
-                value={newNodeName}
-                onChange={(e) => setNewNodeName(e.target.value)}
-                placeholder="New technique…"
-                disabled={!selectedGraphId}
-                style={{ ...ui.input, width: 170, opacity: !selectedGraphId ? 0.6 : 1 }}
-              />
-              <button
-                onClick={() => void createNode()}
-                disabled={!selectedGraphId}
-                style={{ ...ui.button, opacity: !selectedGraphId ? 0.5 : 1 }}
-              >
-                Add node
-              </button>
-            </span>
-
-            {selectedEdgeId != null && (
-              <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <input
-                  value={edgeLabelDraft}
-                  onChange={(e) => setEdgeLabelDraft(e.target.value)}
-                  placeholder="Edge label…"
-                  style={{ ...ui.input, width: 170 }}
-                />
-                <button onClick={() => void saveSelectedEdgeLabel()} style={ui.button}>
-                  Save label
-                </button>
-              </span>
-            )}
-
-            <div
-              ref={searchWrapRef}
-              style={{
-                position: "relative",
-                display: "inline-flex",
-                gap: 6,
-                alignItems: "center",
-                marginLeft: 6,
-              }}
-            >
-              <input
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setIsSearchOpen(true);
-                }}
-                onFocus={() => setIsSearchOpen(true)}
-                placeholder="Search techniques…"
-                style={{ ...ui.input, width: 220 }}
-              />
-              {searchQuery.trim() && (
-                <button
-                  onClick={() => {
-                    setSearchQuery("");
-                    setIsSearchOpen(false);
-                    setRfNodes((prev) => prev.map((n) => ({ ...n, selected: false })));
-                  }}
-                  style={ui.button}
-                  title="Clear search"
-                >
-                  Clear
-                </button>
-              )}
-
-              {isSearchOpen && searchQuery.trim() && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 6px)",
-                    left: 0,
-                    width: 320,
-                    maxHeight: 260,
-                    overflow: "auto",
-                    borderRadius: 12,
-                    border: theme === "dark" ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(0,0,0,0.12)",
-                    background: theme === "dark" ? "#0b0f19" : "#ffffff",
-                    boxShadow: "0 10px 28px rgba(0,0,0,0.18)",
-                    padding: 6,
-                    zIndex: 50,
-                  }}
-                >
-                  {searchResults.length === 0 ? (
-                    <div style={{ padding: 10, fontSize: 12, opacity: 0.75 }}>No matches in this graph.</div>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      {searchResults.map((n) => (
-                        <button
-                          key={n.id}
-                          onClick={async () => {
-                            setIsSearchOpen(false);
-                            focusNodeById(n.id);
-                            await openTechniquePanel(n.id);
-                          }}
-                          style={{
-                            textAlign: "left",
-                            padding: "8px 10px",
-                            borderRadius: 10,
-                            border: theme === "dark" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.10)",
-                            background: theme === "dark" ? "#111827" : "#fff7ed",
-                            color: theme === "dark" ? "#e5e7eb" : "#111827",
-                            cursor: "pointer",
-                          }}
-                          title="Jump to node & open technique"
-                        >
-                          <div style={{ fontWeight: 800, fontSize: 12 }}>{n.name}</div>
-                          <div style={{ fontSize: 11, opacity: 0.75 }}>Open technique panel</div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      <TopBar
+        ui={ui}
+        theme={theme}
+        isMenuOpen={isMenuOpen}
+        setIsMenuOpen={setIsMenuOpen}
+        setTheme={setTheme}
+        loadAll={loadAll}
+        groupNodesCenter={groupNodesCenter}
+        selectedGraphId={selectedGraphId}
+        rfNodesLength={rfNodes.length}
+        error={error}
+        meEmail={me.email}
+        onLogout={onLogout}
+        graphs={graphs}
+        setSelectedGraphId={setSelectedGraphId}
+        newGraphTitle={newGraphTitle}
+        setNewGraphTitle={setNewGraphTitle}
+        createGraph={createGraph}
+        newNodeName={newNodeName}
+        setNewNodeName={setNewNodeName}
+        createNode={createNode}
+        selectedEdgeId={selectedEdgeId}
+        edgeLabelDraft={edgeLabelDraft}
+        setEdgeLabelDraft={setEdgeLabelDraft}
+        saveSelectedEdgeLabel={saveSelectedEdgeLabel}
+        searchWrapRef={searchWrapRef}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        isSearchOpen={isSearchOpen}
+        setIsSearchOpen={setIsSearchOpen}
+        searchResults={searchResults}
+        focusNodeById={focusNodeById}
+        openTechniquePanel={openTechniquePanel}
+        setRfNodes={setRfNodes}
+      />
 
       <div style={{ flex: 1 }}>
         <div style={{ height: "100%", display: "flex" }}>
@@ -1473,7 +1244,9 @@ export default function App() {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{activeNode?.name ?? `Technique #${activeNodeId}`}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    {activeNode?.name ?? `Technique #${activeNodeId}`}
+                  </div>
                   <div style={{ fontSize: 12, opacity: 0.75 }}>
                     Add a video link, then visualise it in first-person and write your steps.
                   </div>

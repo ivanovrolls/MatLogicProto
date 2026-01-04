@@ -56,3 +56,32 @@ But other things return promises too, such as:
 const data = await res.json();
 ```
 So to conclude, if a function is marked as **async** it always returns a promise.
+
+### Headers and Requests
+Headers are metadata about a request or response. They give instructions and context surrounding data that a server is receiving or sending.
+This is important so that the client and server know what to do with data they receive. For example, this code:
+
+```ts
+if (!headers.has("Content-Type") && init.body != null) headers.set("Content-Type", "application/json");
+```
+Tells the server that JSON data is being sent, while this code:
+
+```ts
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+```
+Adds an HTTP authorisation header is a token is provided, allowing the user to stay logged in. Now, the front end is responsible for building the requests in a structured manner to be sent, received and processed by the backend. This is done by sending data in packets, composed of headers, and the body. The body is in JSON format, and contains user input such as their data during a login request:
+
+```ts
+   {"email":"ivan@email.com","password":"secret123"}
+```
+Usually, the _login()_ front end function will create the request body, e.g., _JSON.stringify({email, password})_. After that, the _apiFetch()_ function builds the headers.
+
+### Understanding React
+React is not a infrastructure or anything like that, but a renderer. React simply renders a state of the UI i.e., UI is a function of state. As a general rule, React does nothing until a function _setX(newValue)_ is called. At this moment, React marks the component being changed as **dirty**. It then re-runs the component function. When re-running the function, React is comparing its previous virtual DOM (a UI tree) with the new virtual DOM achieved as a result of the change. React stores its own, cheap, virtual UI tree that resembles the browser DOM, as direct changes to the browser DOM are difficult and finnicky. After seeing the changes between its previous internal UI tree and the newly rendered UI tree, it then applies the smallest possible set of changes to the browser’s DOM.
+
+1. React renders → **Virtual DOM** (JS object tree)
+2. Application state changes
+3. React re-renders → **New Virtual DOM**
+4. React diffs **old vs new Virtual DOM**
+5. React computes the minimal patch
+6. React applies the patch to the **real DOM**
